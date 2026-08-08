@@ -20,6 +20,11 @@ ARG NEXT_PUBLIC_SENTINEL_TOKEN
 ENV NEXT_PUBLIC_SENTINEL_API=$NEXT_PUBLIC_SENTINEL_API \
     NEXT_PUBLIC_SENTINEL_TOKEN=$NEXT_PUBLIC_SENTINEL_TOKEN
 
+# Opts this build into `output: "standalone"`; see next.config.ts for why it is
+# opt-in rather than always-on. The COPY of .next/standalone below is what
+# needs it, so the flag belongs here and nowhere else.
+ENV NEXT_OUTPUT_STANDALONE=1
+
 RUN npm run build
 
 FROM node:22-alpine
