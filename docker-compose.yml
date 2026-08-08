@@ -1,0 +1,60 @@
+# Single-host deployment: backend, console, and a TLS-terminating proxy in front
+# of both. Reads .env for both variable interpolation and the backend's runtime
+# environment, so ANTHROPIC_API_KEY and SENTINEL_API_TOKEN live there and are
+# never committed.
+#
+# Deliberately one replica of the backend. See the CMD note in ./Dockerfile:
+# run state is process-local, so a second instance would answer /resume for runs
+# it does not have.
+
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Set here rather than in .env so they win over whatever a developer's
+      # local copy happens to contain - env_file values would otherwise
+      # override the image defaults and point state back at the container's
+      # ephemeral layer.
+      SENTINEL_DATA_DIR: /data
+      SENTINEL_CORS_ORIGINS: ${SITE_ORIGIN}
+    volumes:
+      - sentinel-data:/data
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Same origin as the console itself, so this is a relative path in
+        # practice; the browser resolves it against the page it is already on.
+        NEXT_PUBLIC_SENTINEL_API: ${SITE_ORIGIN}/api
+        NEXT_PUBLIC_SENTINEL_TOKEN: ${SENTINEL_API_TOKEN}
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates. Without this volume every restart re-requests from
+      # Let's Encrypt and will eventually hit its rate limit.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  sentinel-data:
+  caddy-data:
+  caddy-config:

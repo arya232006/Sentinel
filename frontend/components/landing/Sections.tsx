@@ -1,6 +1,9 @@
 import Image from "next/image";
+import Link from "next/link";
 import flowerImg from "@/public/flower.png";
 import sectionImg from "@/public/section.jpeg";
+import feature2Img from "@/public/feature2.webp";
+import feature3Img from "@/public/feature3.webp";
 import { Arrow } from "./Arrow";
 
 /**
@@ -13,51 +16,29 @@ import { Arrow } from "./Arrow";
  * caught in the first demo.
  */
 
-const STEPS = [
+/**
+ * The card gallery's contents. Titles are plain English, sub-lines are the
+ * category slug the run would actually be authorized under — every one of these
+ * is a real member of ATTACK_CATEGORIES in sentinel/config.py, which is what
+ * keeps this a description of the taxonomy rather than a poster for it.
+ */
+const THREATS = [
   {
-    n: "01",
-    title: "Authorize",
-    body: "A write-once scope names the target, the permitted attack categories and an expiry, hashed for tamper evidence. Nothing runs without one, and the plan is filtered against it twice — once at retrieval, once after generation.",
+    img: feature2Img,
+    title: "Tool calls it was never meant to make",
+    slug: "tool_parameter_hijacking",
   },
   {
-    n: "02",
-    title: "Recon & plan",
-    body: "Benign probes build a profile of the target's purpose, tools and refusal behaviour. The planner retrieves documented techniques and prior-run outcomes, then prioritizes by expected yield: soft hedges first, hard blocks last.",
+    img: feature3Img,
+    title: "A planted document that supersedes your policy",
+    slug: "rag_context_poisoning",
   },
   {
-    n: "03",
-    title: "Adversarial loop",
-    body: "Craft, send, judge — turn by turn, with the attacker free to escalate, pivot or move on. Every tool call the target attempts is intercepted and logged, whether or not it executes.",
-  },
-  {
-    n: "04",
-    title: "Verify & score",
-    body: "Candidate findings are rerun to prove they reproduce, then minimized to the shortest prompt that still works. Severity is weighted arithmetic in Python; the model supplies the impact class, not the number.",
-  },
-];
-
-const SAFEGUARDS = [
-  {
-    title: "Scope-gated",
-    body: "Out-of-scope categories are dropped by the planner and again by the executor. Scopes expire, and there is deliberately no edit or delete path.",
-  },
-  {
-    title: "Human-in-the-loop",
-    body: "The graph interrupts for escalation and again before a report ships. A rejected report cannot write back to cross-run learning.",
-  },
-  {
-    title: "Budget-capped",
-    body: "Every model call is traced with tokens, latency and USD. The run aborts on the cap rather than quietly overrunning it.",
+    img: sectionImg,
+    title: "Ten turns of patient erosion",
+    slug: "multiturn_erosion",
   },
 ];
-
-function Eyebrow({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="font-mono text-[10px] tracking-[0.22em] text-accent uppercase">
-      {children}
-    </p>
-  );
-}
 
 /**
  * Statement band, first thing under the hero.
@@ -252,7 +233,10 @@ function Fig1() {
  */
 export function Adversary() {
   return (
-    <section className="bg-surface">
+    /* scroll-mt clears the fixed nav, which is 24px of inset plus a ~58px pill.
+       Lenis reads the computed scroll-margin-top on its anchor jumps, so this is
+       all the offset the nav links need — see SmoothScroll.tsx. */
+    <section id="adversary" className="scroll-mt-24 bg-surface">
       <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
         <h2 className="max-w-4xl font-serif text-[clamp(1.9rem,4.4vw,3.2rem)] leading-[1.14] text-ink">
           Refusal training, system prompts and output filters hold against{" "}
@@ -369,17 +353,21 @@ export function Field() {
               <h2 className="font-serif text-[clamp(2.1rem,5vw,3.8rem)] leading-[1.06] text-white ink-shadow">
                 Sentinel goes after your agent the way somebody eventually will.
               </h2>
-              <p className="mt-7 max-w-md text-[14px] leading-relaxed text-white/90 ink-shadow">
+              {/* The same frosted material as the CTA below it. The art is at
+                  its busiest right here — flower heads against sky — and a text
+                  shadow alone cannot hold 14px type over that much contrast
+                  change within a single line. */}
+              <p className="mt-7 max-w-md rounded-2xl bg-white/15 px-5 py-4 text-[14px] leading-relaxed text-white ring-1 ring-white/25 backdrop-blur-md ink-shadow">
                 Jailbreaks, guardrail bypasses, data leaks and unsafe tool calls
                 — probed under a scope you signed, on a budget you capped.
               </p>
-              <a
-                href="#console"
+              <Link
+                href="/console"
                 className="group mt-8 inline-flex items-center gap-2 rounded-xl bg-white/20 px-5 py-3 text-[13.5px] font-medium text-white ring-1 ring-white/30 backdrop-blur-md transition hover:bg-white/30"
               >
                 Start an audit
                 <Arrow />
-              </a>
+              </Link>
             </div>
 
             <Notice />
@@ -397,65 +385,62 @@ export function Field() {
   );
 }
 
-export function HowItRuns() {
+/**
+ * Card gallery of what a run goes after.
+ *
+ * The caption plate is the same frosted material as the field band above, for
+ * the same reason: these are photographs with weather in them, and a title set
+ * straight onto one would cross three different luminances in a single line.
+ * It floats clear of the card's lower edge rather than sitting flush, so the
+ * artwork reads as continuing behind it.
+ */
+export function Threats() {
   return (
-    <section id="how" className="scroll-mt-24 border-t border-line bg-bg">
-      <div className="mx-auto max-w-6xl px-6 py-20 sm:py-24">
-        <Eyebrow>How it runs</Eyebrow>
-        <h2 className="mt-3 max-w-2xl font-display text-[clamp(1.7rem,3.4vw,2.6rem)] leading-[1.15] text-ink">
-          One authorized run, from scope to signed report
+    <section id="threats" className="scroll-mt-24 bg-surface">
+      <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
+        <h2 className="max-w-3xl font-serif text-[clamp(1.9rem,4.4vw,3.2rem)] leading-[1.14] text-ink">
+          What Sentinel goes looking for
         </h2>
-        <p className="mt-4 max-w-2xl text-[13.5px] leading-relaxed text-ink-dim">
-          A LangGraph state machine, not a prompt chain. Each phase is a node
-          with typed state, so the run can pause for a human at a gate and
-          resume exactly where it stopped.
-        </p>
+        <Link
+          href="/console"
+          className="group mt-7 inline-flex items-center gap-2 border-b border-ink/25 pb-0.5 text-[13.5px] text-ink transition hover:border-ink"
+        >
+          Authorize a scope
+          <Arrow className="bg-ink/10 group-hover:bg-ink/20" />
+        </Link>
 
-        <ol className="mt-12 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-2 lg:grid-cols-4">
-          {STEPS.map((s) => (
-            <li key={s.n} className="flex flex-col gap-3 bg-surface p-6">
-              <div className="flex items-baseline gap-2.5">
-                <span className="font-mono text-[11px] text-accent">{s.n}</span>
-                <h3 className="font-mono text-[12px] font-semibold tracking-[0.1em] text-ink uppercase">
-                  {s.title}
-                </h3>
+        <ul className="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {THREATS.map((t) => (
+            <li
+              key={t.slug}
+              className="relative isolate aspect-7/6 overflow-hidden rounded-2xl"
+            >
+              <Image
+                src={t.img}
+                alt=""
+                fill
+                unoptimized
+                sizes="(min-width: 1024px) 22rem, (min-width: 640px) 45vw, 90vw"
+                className="pixelated -z-10 object-cover"
+              />
+              {/* min-h is the two-line case measured out — 2×20.6 of title,
+                  10 of gap, 16.5 of slug and 32 of padding, so a card whose
+                  title fits on one line still matches the one that wraps.
+                  justify-center is what keeps the short titles optically
+                  centred in that box rather than riding its top edge, and it
+                  is min- rather than fixed so a third line at a narrow width
+                  grows the plate instead of spilling out of it. */}
+              <div className="absolute inset-x-3 bottom-5 flex min-h-25 flex-col justify-center rounded-xl bg-white/15 px-5 py-4 text-center ring-1 ring-white/25 backdrop-blur-md">
+                <p className="text-[15px] leading-snug font-medium text-white ink-shadow">
+                  {t.title}
+                </p>
+                <p className="mt-2.5 font-mono text-[11px] text-white/75">
+                  {t.slug}
+                </p>
               </div>
-              <p className="text-[12.5px] leading-relaxed text-ink-dim">{s.body}</p>
             </li>
           ))}
-        </ol>
-      </div>
-    </section>
-  );
-}
-
-export function Safeguards() {
-  return (
-    <section id="safeguards" className="scroll-mt-24 border-t border-line bg-surface/40">
-      <div className="mx-auto max-w-6xl px-6 py-20 sm:py-24">
-        <div className="grid gap-12 lg:grid-cols-[22rem_1fr]">
-          <div>
-            <Eyebrow>Safeguards</Eyebrow>
-            <h2 className="mt-3 font-display text-[clamp(1.7rem,3.4vw,2.6rem)] leading-[1.15] text-ink">
-              An attacker you can leave running
-            </h2>
-            <p className="mt-4 text-[13.5px] leading-relaxed text-ink-dim">
-              The tool exists to break things, so the interesting engineering is
-              in what it refuses to do.
-            </p>
-          </div>
-
-          <dl className="grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
-            {SAFEGUARDS.map((s) => (
-              <div key={s.title} className="flex flex-col gap-2.5 bg-surface p-6">
-                <dt className="font-mono text-[12px] font-semibold tracking-[0.1em] text-ink uppercase">
-                  {s.title}
-                </dt>
-                <dd className="text-[12.5px] leading-relaxed text-ink-dim">{s.body}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
+        </ul>
       </div>
     </section>
   );

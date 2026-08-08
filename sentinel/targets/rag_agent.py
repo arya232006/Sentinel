@@ -63,7 +63,7 @@ def _get_collection():
             return _collection
         import chromadb
 
-        client = chromadb.PersistentClient(path=str(config.ROOT / ".chroma"))
+        client = chromadb.PersistentClient(path=str(config.CHROMA_PATH))
         col = client.get_or_create_collection("northwind_policy")
         if col.count() == 0:
             col.add(

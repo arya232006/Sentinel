@@ -1,14 +1,23 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import heroImg from "@/public/hero.png";
 import { Arrow } from "./Arrow";
 
+/**
+ * In page order, so the nav reads as a table of contents rather than a menu.
+ *
+ * The last one leaves the page. That distinction is rendered, not cosmetic: a
+ * hash has to stay a plain <a> so Lenis's anchor handling gets the click, while
+ * a route wants next/link for the client transition — and Link on a bare hash
+ * would run its own shallow scroll against Lenis for the same property.
+ */
 const LINKS = [
-  { href: "#how", label: "How it runs" },
-  { href: "#safeguards", label: "Safeguards" },
-  { href: "#console", label: "Console" },
+  { href: "#adversary", label: "Why an adversary" },
+  { href: "#threats", label: "What it finds" },
+  { href: "/console", label: "Console" },
 ];
 
 /**
@@ -180,8 +189,8 @@ function Nav({ light }: { light: boolean }) {
         light ? "glass-ink" : ""
       }`}
     >
-      <a
-        href="#console"
+      <Link
+        href="/"
         aria-label="Sentinel"
         className={`nav-cross flex size-9 items-center justify-center rounded-[10px] ${
           light
@@ -196,32 +205,35 @@ function Nav({ light }: { light: boolean }) {
             pixels at 2x. At 16px a cell is 1.33px and crispEdges has to round,
             which lands some cells 2px wide and others 3px. */}
         <Mark className="size-3" />
-      </a>
+      </Link>
 
       {/* Section links collapse below sm; the mark and the CTA never do. */}
       <div className="hidden items-center gap-1 sm:flex">
-        {LINKS.map((l) => (
-          <a
-            key={l.href}
-            href={l.href}
-            className={`nav-cross rounded-[10px] px-4 py-2 text-[14px] ${
-              light
-                ? "ink-shadow-clear text-black/70 hover:bg-black/6 hover:text-black"
-                : "ink-shadow text-white/85 hover:bg-white/20 hover:text-white"
-            }`}
-          >
-            {l.label}
-          </a>
-        ))}
+        {LINKS.map((l) => {
+          const Tag = l.href.startsWith("#") ? "a" : Link;
+          return (
+            <Tag
+              key={l.href}
+              href={l.href}
+              className={`nav-cross rounded-[10px] px-4 py-2 text-[14px] ${
+                light
+                  ? "ink-shadow-clear text-black/70 hover:bg-black/6 hover:text-black"
+                  : "ink-shadow text-white/85 hover:bg-white/20 hover:text-white"
+              }`}
+            >
+              {l.label}
+            </Tag>
+          );
+        })}
       </div>
 
-      <a
-        href="#console"
+      <Link
+        href="/console"
         className="group inline-flex items-center gap-2 rounded-[10px] bg-bg/85 px-5 py-2.5 text-[13px] font-medium text-white ring-1 ring-white/15 transition hover:bg-bg"
       >
         Start an audit
         <Arrow />
-      </a>
+      </Link>
     </nav>
   );
 }
@@ -319,8 +331,10 @@ export function Hero() {
               a severity-scored report with a minimized prompt you can rerun
               yourself.
             </p>
+            {/* Stays on the page — this one is an invitation to read on, not a
+                shortcut past everything to the tool. */}
             <a
-              href="#how"
+              href="#adversary"
               className="group mt-6 inline-flex items-center gap-2 border-b border-white/35 pb-0.5 text-[13.5px] text-white transition hover:border-white"
             >
               Get to know it

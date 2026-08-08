@@ -27,7 +27,7 @@ export function SmoothScroll() {
         // A little heavier than the 0.1 default. The hero is a full viewport, so
         // the glide carries better slightly longer without feeling laggy.
         lerp: 0.085,
-        // Hands the #how / #safeguards / #console nav links to Lenis. Its
+        // Hands the #adversary / #threats nav links to Lenis. Its
         // scrollTo reads the target's computed scroll-margin-top, so the
         // sections' existing scroll-mt-24 is respected and no offset is needed.
         anchors: true,

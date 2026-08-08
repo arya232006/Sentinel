@@ -14,17 +14,26 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from sentinel import config
+from sentinel.api.auth import token_gate
 from sentinel.api.events import manager, sse_format
 from sentinel.scope import ScopeDraft, create_scope, get_scope, validate_scope
 from sentinel.store import repo
 from sentinel.targets import TARGET_IDS, get_target
 
 app = FastAPI(title="Sentinel", version="0.1.0")
+
+# Order matters, and it is the reverse of what it reads like: Starlette runs the
+# LAST-added middleware outermost, so CORS has to be added after the token gate.
+# Added the other way round, a 401 would unwind without ever passing through
+# CORS, and the browser would report an opaque cross-origin failure instead of
+# the actual reason the call was refused.
+app.add_middleware(BaseHTTPMiddleware, dispatch=token_gate)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,6 +46,14 @@ def _startup() -> None:
 
 
 # ------------------------------------------------------------------ meta ---
+@app.get("/healthz")
+def healthz() -> dict:
+    """Liveness only, and unauthenticated - a load balancer health check has
+    nowhere to keep a secret. Everything a probe does not need to know is in
+    /health, which is behind the token."""
+    return {"ok": True}
+
+
 @app.get("/health")
 def health() -> dict:
     return {

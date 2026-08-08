@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import time
@@ -21,6 +22,11 @@ import httpx
 
 # Run as `python scripts/e2e_http.py`, so the repo root is not on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Sent on every call so the script works against a deployed backend running with
+# SENTINEL_API_TOKEN set. Empty against a local server, which leaves its gate
+# off, and an empty header dict is simply ignored.
+HEADERS: dict[str, str] = {}
 
 CATEGORIES = {
     "support_bot": ["authority_impersonation", "multiturn_erosion"],
@@ -34,15 +40,33 @@ def main() -> int:
     ap.add_argument("--base", default="http://127.0.0.1:8077")
     ap.add_argument("--target", default="support_bot", choices=list(CATEGORIES))
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument(
+        "--token",
+        default=os.getenv("SENTINEL_API_TOKEN", ""),
+        help="API token, if the backend runs with SENTINEL_API_TOKEN set. "
+        "Defaults to that variable in this shell.",
+    )
+    ap.add_argument(
+        "--target-base",
+        default="",
+        help="Base URL the SERVER uses to reach the target harness, when that "
+        "differs from --base. Against a deployed backend pass its loopback "
+        "address (http://127.0.0.1:8000): the harness only attaches its API "
+        "token to loopback targets, so a public URL here would 401.",
+    )
     args = ap.parse_args()
     base = args.base.rstrip("/")
+    target_base = (args.target_base or args.base).rstrip("/")
+
+    if args.token:
+        HEADERS["X-Sentinel-Token"] = args.token
 
     # 1. scope authorization -------------------------------------------------
     scope = httpx.post(
         f"{base}/scopes",
         json={
             "target_id": args.target,
-            "target_endpoint": f"{base}/targets/{args.target}/chat",
+            "target_endpoint": f"{target_base}/targets/{args.target}/chat",
             "allowed_attack_categories": CATEGORIES[args.target],
             "exclusions": [],
             "authorizer": "e2e-script",
@@ -51,6 +75,7 @@ def main() -> int:
             ).isoformat(),
         },
         timeout=30,
+        headers=HEADERS,
     ).json()
     print(f"scope    {scope['scope_id']}  hash={scope['signed_hash'][:16]}...")
 
@@ -68,11 +93,17 @@ def main() -> int:
                 ),
             },
             timeout=30,
+            headers=HEADERS,
         )
         print(f"plant    {r.status_code} {r.text[:80]}")
 
     # 3. start the run -------------------------------------------------------
-    run = httpx.post(f"{base}/runs", json={"scope_id": scope["scope_id"]}, timeout=30).json()
+    run = httpx.post(
+        f"{base}/runs",
+        json={"scope_id": scope["scope_id"]},
+        timeout=30,
+        headers=HEADERS,
+    ).json()
     run_id = run["run_id"]
     print(f"run      {run_id}\n")
 
@@ -81,7 +112,9 @@ def main() -> int:
     done = threading.Event()
 
     def consume() -> None:
-        with httpx.stream("GET", f"{base}/runs/{run_id}/events", timeout=None) as r:
+        with httpx.stream(
+            "GET", f"{base}/runs/{run_id}/events", timeout=None, headers=HEADERS
+        ) as r:
             event_type = None
             for line in r.iter_lines():
                 if line.startswith("event: "):
@@ -107,7 +140,9 @@ def main() -> int:
         return 1
 
     # 4. report --------------------------------------------------------------
-    report = httpx.get(f"{base}/runs/{run_id}/report", timeout=30).json()
+    report = httpx.get(
+        f"{base}/runs/{run_id}/report", timeout=30, headers=HEADERS
+    ).json()
     print("\n" + "=" * 70)
     print("REPORT")
     print("=" * 70)
@@ -177,6 +212,7 @@ def _approve(base: str, run_id: str, gate: str) -> None:
             f"{base}/runs/{run_id}/resume",
             json={"decision": "approve", "notes": f"e2e auto-approve {gate}"},
             timeout=30,
+            headers=HEADERS,
         )
         if r.status_code == 200:
             return

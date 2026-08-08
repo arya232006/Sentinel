@@ -17,10 +17,11 @@ numbers are directly comparable to the ones in the report.
 
 Two honesty constraints, both surfaced in the output rather than buried:
 
-  1. Opus 5 rejects `temperature`, so it cannot be sampled at 0 like the others.
-     A model run without temperature=0 is not strictly comparable to one that
-     was, and the output says which is which rather than quietly pretending the
-     conditions were identical.
+  1. The Claude 5 reasoning models reject `temperature` (measured: a Sonnet 5
+     target returned "`temperature` is deprecated for this model"), so they
+     cannot be sampled at 0 like Haiku. A model run without temperature=0 is not
+     strictly comparable to one that was, and the output says which is which
+     rather than quietly pretending the conditions were identical.
   2. Three replays per model is enough to separate "always" from "never" and
      not enough to resolve a small difference. A 2/3 vs 3/3 gap is noise at
      this sample size and is reported as such.

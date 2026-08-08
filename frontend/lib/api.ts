@@ -14,6 +14,23 @@ export const API_BASE = (
   process.env.NEXT_PUBLIC_SENTINEL_API ?? "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
 
+/**
+ * Shared secret for a backend running with SENTINEL_API_TOKEN set. Empty
+ * against a local API, which leaves its gate off.
+ *
+ * NEXT_PUBLIC_ means this is compiled into the client bundle and is readable by
+ * anyone who opens devtools — it is not a user credential and does not identify
+ * whoever is driving the console. What it buys is that the deployed API is not
+ * open to whoever finds the hostname, which matters because POST /runs spends
+ * real money. Put an identity proxy in front of both services if you need to
+ * know *who* started a run.
+ */
+const API_TOKEN = (process.env.NEXT_PUBLIC_SENTINEL_TOKEN ?? "").trim();
+
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { "X-Sentinel-Token": API_TOKEN } : {};
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -29,7 +46,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+        ...init?.headers,
+      },
       cache: "no-store",
     });
   } catch {
@@ -110,5 +131,12 @@ export const api = {
 
   listFindings: (runId: string) => request<Finding[]>(`/runs/${runId}/report`),
 
-  eventsUrl: (runId: string) => `${API_BASE}/runs/${runId}/events`,
+  /**
+   * The token rides in the query string here, not a header, because this URL is
+   * consumed by EventSource — which offers no way to set request headers. Every
+   * other call in this module uses X-Sentinel-Token.
+   */
+  eventsUrl: (runId: string) =>
+    `${API_BASE}/runs/${runId}/events` +
+    (API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : ""),
 };

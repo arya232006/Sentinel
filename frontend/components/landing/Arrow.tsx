@@ -13,11 +13,18 @@
  * the server and importing this from a "use client" module would drag that whole
  * module — clock, hero image and all — across the boundary for a chevron.
  */
-export function Arrow() {
+export function Arrow({
+  // The default chip is a white veil, which is invisible on a light ground —
+  // callers on the pale bands pass a dark one instead. The glyph itself is
+  // always currentColor and needs no say in it.
+  className = "bg-white/25 group-hover:bg-white/40",
+}: {
+  className?: string;
+}) {
   return (
     <span
       aria-hidden
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-white/25 transition group-hover:bg-white/40"
+      className={`inline-flex size-5 shrink-0 items-center justify-center rounded-full transition ${className}`}
     >
       <span className="-translate-y-[1.8px] font-display text-[26.32px] leading-none">
         ›

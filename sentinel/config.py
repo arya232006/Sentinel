@@ -27,9 +27,11 @@ def _int_env(name: str, default: int) -> int:
 # --------------------------------------------------------------------------
 # Models
 #
-# Opus 5 rejects temperature/top_p/top_k and thinking.budget_tokens with a 400.
+# The Claude 5 reasoning models reject temperature/top_p/top_k and
+# thinking.budget_tokens with a 400 - Sonnet 5 as well as Opus 5, measured.
 # Nothing on the Sentinel side may pass them. The target harness needs
 # determinism, so it runs Haiku 4.5, which still accepts temperature.
+# accepts_temperature() below is the single source of truth for the rule.
 # --------------------------------------------------------------------------
 ATTACKER_MODEL = "claude-opus-5"
 JUDGE_MODEL = "claude-opus-5"
@@ -164,11 +166,49 @@ HIGH_SEVERITY_CATEGORIES = frozenset(
 # --------------------------------------------------------------------------
 # Runtime
 # --------------------------------------------------------------------------
-DB_PATH = ROOT / os.getenv("SENTINEL_DB", "sentinel.db")
-CHECKPOINT_PATH = ROOT / "checkpoints.db"
+# Everything Sentinel writes at runtime lives under DATA_DIR. Defaults to the
+# repo root, which is what a checkout expects; a container points it at a
+# mounted volume so the SQLite file and the Chroma store survive a redeploy.
+# An absolute SENTINEL_DB still wins over DATA_DIR - pathlib joins that way.
+DATA_DIR = Path(os.getenv("SENTINEL_DATA_DIR", str(ROOT)))
+DB_PATH = DATA_DIR / os.getenv("SENTINEL_DB", "sentinel.db")
+CHECKPOINT_PATH = DATA_DIR / "checkpoints.db"
+CHROMA_PATH = DATA_DIR / ".chroma"
 HOST = os.getenv("SENTINEL_HOST", "127.0.0.1")
 PORT = int(os.getenv("SENTINEL_PORT", "8000"))
 BASE_URL = f"http://{HOST}:{PORT}"
+
+
+# --------------------------------------------------------------------------
+# Access control
+#
+# Read per call rather than captured at import, so a test can set the
+# environment and see the effect without reimporting the module.
+# --------------------------------------------------------------------------
+def api_token() -> str:
+    """Shared secret required on every API call. Empty string disables the gate.
+
+    Unset is the local default on purpose: the test suite, the offline pipeline
+    and scripts/e2e_http.py all talk to an open API on loopback. Any deployment
+    that binds a public interface MUST set this. `POST /runs` spends real money
+    against ANTHROPIC_API_KEY, up to the profile cap per run, and no other check
+    stands between an anonymous caller and that spend - the scope record governs
+    what a run may attack, not who may start one.
+    """
+    return os.getenv("SENTINEL_API_TOKEN", "").strip()
+
+
+def cors_origins() -> list[str]:
+    """Browser origins allowed to call the API, comma-separated.
+
+    Defaults to a local console. This is defence in depth rather than the
+    security boundary: the API sets no cookies, so CORS does not stop a direct
+    (non-browser) request - api_token does. What an origin allowlist does buy is
+    that a page the operator happens to visit cannot drive their browser into
+    starting runs. Set to "*" only for a throwaway backend with no live key.
+    """
+    raw = os.getenv("SENTINEL_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
 
 
 def fake_llm() -> bool:

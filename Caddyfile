@@ -1,0 +1,28 @@
+# One origin for both services. The console is served at /, the API at /api,
+# which means the browser never makes a cross-origin request and CORS stops
+# being something a deploy can get wrong. The backend's SENTINEL_CORS_ORIGINS
+# allowlist stays configured regardless, as defence in depth for anything that
+# reaches it another way.
+#
+# SITE_ADDRESS comes from .env. A hostname gets an automatic Let's Encrypt
+# certificate; `:80` serves plain HTTP for a local or IP-only trial.
+{$SITE_ADDRESS} {
+	handle_path /api/* {
+		reverse_proxy backend:8000 {
+			# The run stream is Server-Sent Events, and a run can last ~26
+			# minutes. Caddy special-cases text/event-stream, but this is stated
+			# outright because the failure mode is silent: any buffering here
+			# shows the operator a blank console for the length of the audit and
+			# then dumps every event at once.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		# Compression is scoped to the console. Left global it would also apply
+		# to the event stream, where it reintroduces exactly the buffering the
+		# flush_interval above exists to prevent.
+		encode zstd gzip
+		reverse_proxy frontend:3000
+	}
+}

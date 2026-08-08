@@ -33,6 +33,12 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
             _conn = None
             _db_path = Path(path)
         if _conn is None:
+            # sqlite3 creates the file but not the directory holding it, and
+            # fails with a bare "unable to open database file" when it is
+            # missing. That is precisely what a freshly mounted volume looks
+            # like on a container's first boot, so create the tree here rather
+            # than make every deployment remember to pre-create SENTINEL_DATA_DIR.
+            _db_path.parent.mkdir(parents=True, exist_ok=True)
             _conn = sqlite3.connect(str(_db_path), check_same_thread=False)
             _conn.row_factory = sqlite3.Row
             _conn.execute("PRAGMA foreign_keys = ON")
