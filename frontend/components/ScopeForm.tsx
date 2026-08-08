@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { API_BASE, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import { prettyCategory } from "@/lib/format";
 import type { Health, Scope } from "@/lib/types";
 
@@ -85,9 +85,13 @@ export function ScopeForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Built-in harness must be reached over loopback. Transport only attaches
+  // SENTINEL_API_TOKEN for 127.0.0.1/localhost; defaulting to API_BASE (the
+  // public origin, e.g. Vercel → sslip.io) makes every probe 401.
+  const harnessEndpoint = `http://127.0.0.1:8000/targets/${targetId}/chat`;
   const resolvedEndpoint = useMemo(
-    () => endpoint.trim() || `${API_BASE}/targets/${targetId}/chat`,
-    [endpoint, targetId],
+    () => endpoint.trim() || harnessEndpoint,
+    [endpoint, harnessEndpoint],
   );
 
   const pickTarget = (id: string) => {
@@ -277,15 +281,17 @@ export function ScopeForm({
               Target endpoint
             </label>
             <p className={HINT}>
-              Leave blank to test this instance&rsquo;s built-in agent. Any HTTP
-              endpoint speaking the same contract works.
+              Leave blank to test this instance&rsquo;s built-in agent over
+              loopback (<span className="font-mono text-[12px]">{harnessEndpoint}</span>).
+              A public URL here will 401 when the API token is set. Any HTTP
+              endpoint speaking the same contract works for a third-party target.
             </p>
             <input
               id="endpoint"
               className={`${INPUT} mt-3 font-mono text-[13px]`}
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
-              placeholder={`${API_BASE}/targets/${targetId}/chat`}
+              placeholder={harnessEndpoint}
             />
           </div>
 
