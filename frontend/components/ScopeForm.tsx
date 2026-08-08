@@ -4,11 +4,17 @@ import { useMemo, useState } from "react";
 import { API_BASE, api } from "@/lib/api";
 import { prettyCategory } from "@/lib/format";
 import type { Health, Scope } from "@/lib/types";
-import { Badge, Button, Field, FieldGroup, Input, Textarea } from "./ui";
 
 /**
  * The authorization gate. No run can start without one of these, and the record
  * is write-once and hashed — see sentinel/scope/models.py.
+ *
+ * Presented for someone filling it in rather than for an operator reading a
+ * dense board, which is why it does not use the ui.tsx Field/Input/Panel set:
+ * those are tuned for the run views, where 10px tracked mono is the right
+ * density for a wall of live state. A form is not that. Labels here are sentence
+ * case at a readable size, and the two fields most people never touch are behind
+ * a disclosure rather than sitting at the same level as the required ones.
  *
  * Category defaults per target mirror scripts/e2e_http.py so the form produces a
  * scope that is actually exercisable against each harness agent.
@@ -19,12 +25,44 @@ const DEFAULT_CATEGORIES: Record<string, string[]> = {
   rag_agent: ["rag_context_poisoning", "indirect_injection"],
 };
 
-function defaultExpiry(hours = 4): string {
+/**
+ * One plain line each, summarising the deliberate weakness the harness agent
+ * was built around — condensed from the module docstrings in sentinel/targets/.
+ * Anything not in this map still renders; it just shows its id alone.
+ */
+const TARGET_BLURB: Record<string, { name: string; blurb: string }> = {
+  support_bot: {
+    name: "Support bot",
+    blurb: "Refuses customer-data requests as a preference, not a rule.",
+  },
+  tool_agent: {
+    name: "Tool agent",
+    blurb: "Calls real mock functions; every call is recorded as it is made.",
+  },
+  rag_agent: {
+    name: "RAG agent",
+    blurb: "Answers from a document store a document can be planted in.",
+  },
+};
+
+/** Most scopes want hours, not a calendar. The picker keeps the exact field. */
+const PRESETS = [
+  { label: "4 hours", hours: 4 },
+  { label: "24 hours", hours: 24 },
+  { label: "7 days", hours: 168 },
+];
+
+function expiryAfter(hours: number): string {
   const d = new Date(Date.now() + hours * 3600_000);
   // datetime-local wants a local-time string with no zone suffix.
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+const LABEL = "block text-[14px] font-medium text-ink";
+const HINT = "mt-1 text-[13px] leading-relaxed text-ink-mute";
+const INPUT =
+  "w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-[14px] text-ink outline-none transition placeholder:text-ink-mute focus:border-accent focus:ring-2 focus:ring-accent/15";
 
 export function ScopeForm({
   health,
@@ -43,7 +81,7 @@ export function ScopeForm({
   );
   const [exclusions, setExclusions] = useState("");
   const [authorizer, setAuthorizer] = useState("");
-  const [expiry, setExpiry] = useState(defaultExpiry);
+  const [expiry, setExpiry] = useState(() => expiryAfter(4));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +106,8 @@ export function ScopeForm({
       prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c],
     );
 
-  const valid = selected.length > 0 && authorizer.trim() !== "" && expiry !== "";
+  const valid =
+    selected.length > 0 && authorizer.trim() !== "" && expiry !== "";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,42 +136,47 @@ export function ScopeForm({
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4">
-      <FieldGroup label="Target agent">
-        <div className="grid grid-cols-3 gap-1.5">
-          {targets.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => pickTarget(t)}
-              className={`rounded border px-2 py-2 font-mono text-[11px] transition ${
-                targetId === t
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-line bg-surface-2 text-ink-dim hover:border-ink-mute"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
+    <form onSubmit={submit} className="space-y-9">
+      <fieldset>
+        <legend className={LABEL}>Which agent are you testing?</legend>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {targets.map((t) => {
+            const on = targetId === t;
+            const meta = TARGET_BLURB[t];
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => pickTarget(t)}
+                aria-pressed={on}
+                className={`rounded-xl border px-4 py-3.5 text-left transition ${
+                  on
+                    ? "border-accent bg-accent/8 ring-1 ring-accent/30"
+                    : "border-line bg-surface hover:border-ink-mute"
+                }`}
+              >
+                <span className="block text-[14px] font-medium text-ink">
+                  {meta?.name ?? t}
+                </span>
+                {meta ? (
+                  <span className="mt-1 block text-[12.5px] leading-snug text-ink-mute">
+                    {meta.blurb}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
-      </FieldGroup>
+      </fieldset>
 
-      <Field
-        label="Target endpoint"
-        hint="Defaults to this Sentinel instance's harness. Any HTTP endpoint speaking the same contract works."
-      >
-        <Input
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder={`${API_BASE}/targets/${targetId}/chat`}
-        />
-      </Field>
-
-      <FieldGroup
-        label="Allowed attack categories"
-        hint="Enforced at every phase transition, not just at run start. The planner cannot generate outside this set."
-      >
-        <div className="grid grid-cols-2 gap-1.5">
+      <fieldset>
+        <legend className={LABEL}>What is it allowed to try?</legend>
+        <p className={HINT}>
+          The run can never go outside this list — it is checked at every step,
+          not just when the run starts. Sensible defaults are already picked for
+          the agent you chose.
+        </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {categories.map((c) => {
             const on = selected.includes(c);
             return (
@@ -140,15 +184,19 @@ export function ScopeForm({
                 key={c}
                 type="button"
                 onClick={() => toggle(c)}
-                className={`flex items-center gap-2 rounded border px-2 py-1.5 text-left font-mono text-[10px] transition ${
+                aria-pressed={on}
+                className={`flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-left text-[13.5px] transition ${
                   on
-                    ? "border-accent/50 bg-accent/10 text-accent"
-                    : "border-line bg-surface-2 text-ink-mute hover:border-ink-mute"
+                    ? "border-accent/60 bg-accent/8 text-ink"
+                    : "border-line bg-surface text-ink-dim hover:border-ink-mute"
                 }`}
               >
                 <span
-                  className={`flex size-3 shrink-0 items-center justify-center rounded-xs border ${
-                    on ? "border-accent bg-accent text-bg" : "border-ink-mute"
+                  aria-hidden
+                  className={`flex size-4 shrink-0 items-center justify-center rounded border text-[10px] ${
+                    on
+                      ? "border-accent bg-accent text-white"
+                      : "border-ink-mute/60"
                   }`}
                 >
                   {on ? "✓" : ""}
@@ -158,55 +206,129 @@ export function ScopeForm({
             );
           })}
         </div>
-      </FieldGroup>
+      </fieldset>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Authorizer">
-          <Input
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <label className={LABEL} htmlFor="authorizer">
+            Who is authorizing this?
+          </label>
+          <p className={HINT}>Recorded on the permission record.</p>
+          <input
+            id="authorizer"
+            className={`${INPUT} mt-3`}
             value={authorizer}
             onChange={(e) => setAuthorizer(e.target.value)}
             placeholder="jane.doe@acme.com"
             required
           />
-        </Field>
-        <Field label="Expiry">
-          <Input
+        </div>
+
+        <div>
+          <span className={LABEL}>How long does permission last?</span>
+          <p className={HINT}>After this, the scope stops authorizing runs.</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {PRESETS.map((p) => {
+              // Compared to the minute, so a preset stays lit only until the
+              // exact field is edited away from it.
+              const on = expiry === expiryAfter(p.hours);
+              return (
+                <button
+                  key={p.hours}
+                  type="button"
+                  onClick={() => setExpiry(expiryAfter(p.hours))}
+                  aria-pressed={on}
+                  className={`rounded-lg border px-3 py-1.5 text-[13px] transition ${
+                    on
+                      ? "border-accent bg-accent/8 text-ink"
+                      : "border-line bg-surface text-ink-dim hover:border-ink-mute"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          <input
             type="datetime-local"
+            aria-label="Exact expiry"
+            className={`${INPUT} mt-2`}
             value={expiry}
             onChange={(e) => setExpiry(e.target.value)}
             required
           />
-        </Field>
+        </div>
       </div>
 
-      <Field label="Exclusions" hint="One per line. Checked on every scope validation.">
-        <Textarea
-          rows={2}
-          value={exclusions}
-          onChange={(e) => setExclusions(e.target.value)}
-          placeholder="production_db&#10;pii_records"
-        />
-      </Field>
+      {/* The two fields most people never touch. The endpoint defaults to this
+          instance's own harness and the exclusion list is optional, so putting
+          them inline was making the form look twice as long as it is. */}
+      <details className="group rounded-xl border border-line bg-surface-2/40 px-4 py-3">
+        <summary className="cursor-pointer list-none text-[13.5px] font-medium text-ink-dim transition select-none hover:text-ink">
+          <span className="inline-block w-4 transition group-open:rotate-90">
+            ›
+          </span>
+          Advanced
+        </summary>
+
+        <div className="mt-5 space-y-6 pb-1">
+          <div>
+            <label className={LABEL} htmlFor="endpoint">
+              Target endpoint
+            </label>
+            <p className={HINT}>
+              Leave blank to test this instance&rsquo;s built-in agent. Any HTTP
+              endpoint speaking the same contract works.
+            </p>
+            <input
+              id="endpoint"
+              className={`${INPUT} mt-3 font-mono text-[13px]`}
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              placeholder={`${API_BASE}/targets/${targetId}/chat`}
+            />
+          </div>
+
+          <div>
+            <label className={LABEL} htmlFor="exclusions">
+              Off-limits
+            </label>
+            <p className={HINT}>
+              One per line. Checked every time the scope is validated.
+            </p>
+            <textarea
+              id="exclusions"
+              rows={3}
+              className={`${INPUT} mt-3 resize-y font-mono text-[13px]`}
+              value={exclusions}
+              onChange={(e) => setExclusions(e.target.value)}
+              placeholder={"production_db\npii_records"}
+            />
+          </div>
+        </div>
+      </details>
 
       {error ? (
-        <p className="rounded border border-crit/40 bg-crit/10 px-2.5 py-2 font-mono text-[11px] text-crit">
+        <p className="rounded-lg border border-crit/40 bg-crit/10 px-3.5 py-2.5 text-[13px] text-crit">
           {error}
         </p>
       ) : null}
 
-      <div className="flex items-center gap-3">
-        <Button type="submit" disabled={!valid || busy}>
+      <div className="flex flex-wrap items-center gap-4 border-t border-line pt-6">
+        <button
+          type="submit"
+          disabled={!valid || busy}
+          className="rounded-lg bg-accent px-5 py-2.5 text-[14px] font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+        >
           {busy ? "Authorizing…" : "Create authorization"}
-        </Button>
-        {!valid ? (
-          <span className="font-mono text-[10px] text-ink-mute">
-            {selected.length === 0
-              ? "select at least one category"
-              : "authorizer and expiry are required"}
-          </span>
-        ) : (
-          <Badge tone="mute">write-once · sha256 hashed</Badge>
-        )}
+        </button>
+        <span className="text-[13px] text-ink-mute">
+          {valid
+            ? "Written once, then sealed with a checksum."
+            : selected.length === 0
+              ? "Pick at least one thing it may try."
+              : "Add who is authorizing, and how long for."}
+        </span>
       </div>
     </form>
   );
