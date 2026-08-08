@@ -34,9 +34,14 @@ htmlcov/
 # Vector / retrieval local store
 .chroma/
 
-# Frontend (if present)
+# Frontend
 node_modules/
 frontend/dist/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
 
 # HTTP cassettes may contain sensitive response bodies
 cassettes/*.json

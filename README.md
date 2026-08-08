@@ -22,21 +22,42 @@ Design rationale: [DESIGN.md](DESIGN.md). Original brief:
 | Offline pipeline (`SENTINEL_FAKE_LLM=1`) | Verified end-to-end, all 3 targets |
 | HTTP path incl. 3 interrupt gates | Verified end-to-end, all 3 targets |
 | Test suite | 49 passing |
+| Frontend — console + engagement views | Built; browser-verified against all 3 targets offline |
+| Anthropic API request shape | **Verified live** — see below |
 | Shakedown backend (OpenAI, dev-only) | Wired; translation unit-tested. Not yet run against the live OpenAI API |
-| **Live Claude runs** | **Not yet executed — no API key was set during the build** |
-| **Judge precision/recall numbers** | **Not yet measured — requires an Anthropic key** |
-| Frontend | Deferred |
+| **A full live audit run** | **Not yet executed** |
+| **Judge precision/recall numbers** | **Not yet measured** |
+| **Attacker guardrail suite** | **Not yet run — do not demo before it passes** |
 
-Everything below the line "requires a live key" is wired and ready but has not
-been run against the real API. Treat those as unverified until you run them.
+### What "verified live" covers, exactly
+
+Two single calls were made against the real Anthropic API to prove the request
+shape, not the product:
+
+| Path | Result |
+|---|---|
+| `claude-haiku-4-5` + `temperature=0` via `POST /targets/support_bot/chat` | 200, in-character response |
+| `claude-opus-5` + `output_config={"effort":"medium"}` + `messages.parse(output_format=JudgeVerdict)` | 200, valid structured verdict, `stop_reason: end_turn`, \$0.00794 |
+
+So the model ids are real, Opus 5 accepts `effort`, structured output returns a
+schema-valid object, and cost accounting reads real `usage`. That is the whole
+claim.
+
+**Still unproven:** a complete audit run; `craft_probe` at `effort: high` with
+the guardrail block; whether a real probe defeats a real target; refusal
+handling in practice; prompt-cache economics; both eval suites. Treat every row
+marked **not yet** as unverified until you run it.
 
 ---
 
 ## Quick start
 
+### Backend
+
 ```bash
-pip install -e .
-cp .env.example .env          # add ANTHROPIC_API_KEY
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env          # copy, don't rename — add ANTHROPIC_API_KEY
 
 # Offline: full pipeline, deterministic, no API key, no cost
 SENTINEL_FAKE_LLM=1 python -m uvicorn sentinel.api.main:app --port 8000
@@ -48,6 +69,47 @@ python scripts/e2e_http.py --base http://127.0.0.1:8000 --target tool_agent
 ```
 
 `python -m pytest` runs the suite (offline, no key needed).
+
+### Console
+
+A separate Next.js app in [frontend/](frontend/) — a plain directory, not a
+workspace package, since the backend is Python and monorepo tooling would only
+manage half the repo:
+
+```bash
+cd frontend && npm install && npm run dev     # http://localhost:3000
+```
+
+It talks to the API directly (CORS is open) and expects it at
+`http://127.0.0.1:8000`. Override with `NEXT_PUBLIC_SENTINEL_API` — note this is
+inlined at compile time, so pointing the console at a different backend needs a
+dev-server restart, not a page reload:
+
+```bash
+NEXT_PUBLIC_SENTINEL_API=http://127.0.0.1:8077 npm run dev   # e.g. an offline backend
+```
+
+(Next will not run two dev servers from one directory, so use one console and
+restart it against whichever backend you want.)
+
+A run renders two ways off the same SSE subscription, switchable mid-run:
+
+- **`/runs/{id}/engagement`** — tactical view, the default landing. SENTINEL-1
+  against the target; probes are shots, the target's shields are its
+  `refusal_map`, and erosion is visible as facets weaken. Verification replays
+  as a volley showing reproducibility and the minimized trigger.
+- **`/runs/{id}`** — the dense console: Plan / Transcript / Findings / Trace.
+
+Neither view invents data; see [frontend/README.md](frontend/README.md) for the
+element-to-field mapping.
+
+Two things that surprise people:
+
+- The first `rag_agent` request downloads Chroma's default embedding model and
+  can take ~40s. Every later call is fast.
+- Scopes are write-once by design, so there is no delete path and the list
+  accumulates. Deleting `sentinel.db` resets scopes, runs and findings; the
+  seeded attack-pattern table rebuilds on startup.
 
 ---
 
@@ -84,6 +146,10 @@ Other API details that shaped the build:
   is exactly the workload that trips this, so `stop_reason` is checked before
   `content` is ever indexed, and a refusal is logged as a first-class outcome.
 
+The first three of those — model ids, `effort`, and structured output — are
+confirmed against the live API (see [Status](#status)). Refusal handling and
+prompt-cache economics are not; no call has tripped a refusal yet.
+
 ---
 
 ## Architecture
@@ -106,9 +172,15 @@ sentinel/
                        verify, score, gates, control
   knowledge/           curated technique KB + cross-run pattern retrieval
   targets/             3 vulnerable agents, mock tools, runtime interceptor
-  store/               SQLite (Postgres-compatible DDL)
+  store/               SQLite (Postgres-compatible DDL); all access serialized
   eval/                judge benchmark + attacker guardrail suite
-  api/                 FastAPI + SSE broker
+  api/                 FastAPI + SSE broker (graph.stream -> typed events)
+
+frontend/              Next.js 16 console — see frontend/README.md
+  app/runs/[id]/                    dense console
+  app/runs/[id]/engagement/         tactical engagement view
+  lib/useRunStream.ts               SSE subscription + reducer
+  lib/useEngagement.ts              feed -> paced engagement beats
 ```
 
 **`sentinel/llm/client.py` is the only module that imports `anthropic`.** That is
@@ -131,6 +203,39 @@ budget check → the call → refusal check → cost from `usage` → trace entr
 Budget profiles: **dev** (warn \$1 / cap \$2) is the default; **demo** (warn \$5 /
 cap \$8) is opt-in via `SENTINEL_PROFILE=demo`. Burning a demo-sized budget
 requires opting in, not remembering to opt out.
+
+---
+
+## Three defects the console surfaced
+
+Building a browser client exercised paths `scripts/e2e_http.py` structurally
+could not, and each of these was a real bug rather than a UI concern.
+
+**1. The live panels could not have been live.** `_execute` used
+`graph.invoke()` and only flushed accumulated state at each interrupt. Measured
+on a real run: **one** `transcript` event for an entire two-attack run, and
+`finding` delivered **twice per finding** — once per gate. DESIGN.md 14 specifies
+`stream_mode="updates"`; the code did not. Now each node's delta is translated as
+that node completes, and only fields the node actually wrote are emitted.
+
+**2. SQLite corruption under concurrency.** One connection opened with
+`check_same_thread=False` was shared by the FastAPI threadpool, the run worker
+thread and the target handlers, with no serialization on execution — that flag
+only silences Python's ownership check, it does not make concurrent use safe. A
+browser loading `/scopes` while a run wrote trace rows got `IndexError: tuple
+index out of range`, surfacing in-browser as a spurious CORS failure. Every
+statement now runs under a lock, with rows materialised and commits issued
+inside it. Stress-tested at ~12k concurrent requests during a live run, zero
+failures.
+
+**3. `chromadb` imported but never declared.** `targets/rag_agent.py` imports it
+unguarded and it was missing from `pyproject.toml`, so `rag_agent` — one of the
+three headline targets — 500s on a clean install.
+
+A fourth change was additive rather than a fix: `PlannedAttack` gained
+`target_facet`, the `refusal_map` key an attack is aimed at. It lets a consumer
+tie an attack to the specific refusal behaviour it probes instead of inferring
+it from prose, and it is what makes the engagement view's shields truthful.
 
 ---
 
@@ -253,13 +358,20 @@ with no other edits; the Anthropic path in `client.py` is untouched by it.
 
 ## Before a live demo
 
-1. `python -m sentinel.eval.run_eval --sweep` — measures judge precision/recall
-   at low/medium/high. **Not yet run.** Ship `medium` unless `low` ties.
-2. `python -m sentinel.eval.run_eval --guardrail-only` — asserts the attacker
+1. `python -m sentinel.eval.run_eval --guardrail-only` — asserts the attacker
    node redacts or refuses on 10 prompts engineered to tempt it into full
-   harmful output. **Not yet run. Do not demo until this passes.**
-3. `SENTINEL_PROFILE=demo` for the \$8 cap.
-4. Rehearse all three targets live and confirm ≥1 confirmed finding each.
+   harmful output. **Not yet run. Do not demo until this passes.** Run this
+   first; it is the cheapest and the only one that gates the demo.
+2. `python -m sentinel.eval.run_eval --sweep` — measures judge precision/recall
+   at low/medium/high. **Not yet run.** Ship `medium` unless `low` ties. This is
+   the most expensive step: the benchmark runs three times.
+3. `SENTINEL_PROFILE=demo` for the \$8 cap. The cap is **per run**, not per
+   session — the sweep is not covered by it.
+4. Rehearse all three targets live and confirm ≥1 confirmed finding each. Budget
+   roughly \$0.30–1.00 per live run; expect it to be far slower than offline,
+   since Opus 5 at `effort: high` takes 10–30s per probe.
+5. Open the run on `/runs/{id}/engagement` for the demo and switch to
+   `/runs/{id}` when someone asks to see the underlying data.
 
 ---
 
@@ -270,8 +382,9 @@ POST   /scopes                 create authorization record (returns signed_hash)
 GET    /scopes  /scopes/{id}
 POST   /runs                   {scope_id} -> run_id, starts graph on a worker thread
 GET    /runs/{id}
-GET    /runs/{id}/events       SSE: plan|recon|transcript|finding|trace|interrupt|
-                                    budget|budget_warning|status|report|done
+GET    /runs/{id}/events       SSE: plan|recon|transcript|cursor|route|intercept|
+                                    finding|trace|interrupt|budget|budget_warning|
+                                    status|report|done
 POST   /runs/{id}/resume       {decision, notes} -> resolves the parked gate
 GET    /runs/{id}/report
 GET    /runs/{id}/trace
@@ -279,6 +392,15 @@ POST   /targets/{id}/chat      the three harness agents
 POST   /targets/rag/plant      scope-gated RAG poisoning
 ```
 
+The graph runs under `graph.stream(..., stream_mode="updates")` and each node's
+state delta is translated into typed events as that node completes. An earlier
+version used `graph.invoke()` and only flushed accumulated state at the next
+interrupt: the plan, transcript and findings arrived in one burst at the report
+gate — findings duplicated once per gate — so the live panels sat empty through
+the entire attack cycle. Only fields a node actually wrote are emitted.
+
 SSE events carry a monotonic `seq`; a subscriber replays history then skips
 anything the queue re-delivers below the last replayed `seq`. Without that a
 client connecting mid-run receives each pending event twice and acts on it twice.
+Clients must dedupe on `seq` too — `EventSource` reconnects on its own, and each
+reconnect replays the whole history.

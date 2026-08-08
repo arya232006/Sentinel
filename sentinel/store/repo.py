@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ from sentinel.config import DB_PATH, ROOT
 from sentinel.scope.models import Scope
 
 _lock = threading.Lock()
+_stmt_lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
 _db_path: Path = DB_PATH
 
@@ -38,6 +41,27 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
         return _conn
 
 
+@contextmanager
+def _db() -> Iterator[sqlite3.Connection]:
+    """Hold the connection for one statement or transaction, exclusively.
+
+    The single connection is shared by three sets of threads: the FastAPI
+    threadpool serving the UI, the run worker thread, and the target handlers.
+    `check_same_thread=False` only silences Python's ownership check - it does
+    NOT make concurrent use safe. Interleaved execute()/fetch() on one
+    connection corrupts cursor state; the observed symptom was GET /scopes
+    failing with `IndexError: tuple index out of range` while a run was writing
+    trace rows from its worker thread.
+
+    Serializing is ample here: every statement in this module is a single-row
+    write or a small select. Rows are materialised and commits issued inside
+    the lock, so no caller ever touches a live cursor or an uncommitted write.
+    """
+    conn = connect()
+    with _stmt_lock:
+        yield conn
+
+
 def reset(path: Path | str) -> None:
     """Test helper: point the repo at a fresh database."""
     global _conn
@@ -54,29 +78,31 @@ def _now() -> str:
 
 # ---------------------------------------------------------------- scopes ---
 def insert_scope(scope: Scope) -> None:
-    conn = connect()
-    conn.execute(
-        """INSERT INTO scopes (scope_id, target_id, target_endpoint, payload_json,
-                               signed_hash, authorizer, expiry_timestamp, created_at)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (
-            scope.scope_id,
-            scope.target_id,
-            scope.target_endpoint,
-            json.dumps(scope.hashed_payload()),
-            scope.signed_hash,
-            scope.authorizer,
-            scope.expiry_timestamp.isoformat(),
-            scope.created_at.isoformat(),
-        ),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO scopes (scope_id, target_id, target_endpoint, payload_json,
+                                   signed_hash, authorizer, expiry_timestamp, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                scope.scope_id,
+                scope.target_id,
+                scope.target_endpoint,
+                json.dumps(scope.hashed_payload()),
+                scope.signed_hash,
+                scope.authorizer,
+                scope.expiry_timestamp.isoformat(),
+                scope.created_at.isoformat(),
+            ),
+        )
+        conn.commit()
 
 
 def get_scope(scope_id: str) -> Scope | None:
-    row = connect().execute(
-        "SELECT payload_json, signed_hash FROM scopes WHERE scope_id = ?", (scope_id,)
-    ).fetchone()
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT payload_json, signed_hash FROM scopes WHERE scope_id = ?",
+            (scope_id,),
+        ).fetchone()
     if row is None:
         return None
     payload = json.loads(row["payload_json"])
@@ -84,142 +110,147 @@ def get_scope(scope_id: str) -> Scope | None:
 
 
 def list_scopes() -> list[dict[str, Any]]:
-    rows = connect().execute(
-        "SELECT scope_id, target_id, authorizer, expiry_timestamp, created_at "
-        "FROM scopes ORDER BY created_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT scope_id, target_id, authorizer, expiry_timestamp, created_at "
+            "FROM scopes ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ------------------------------------------------------------------ runs ---
 def insert_run(run_id: str, scope_id: str, budget: dict) -> None:
-    conn = connect()
-    conn.execute(
-        "INSERT INTO runs (run_id, scope_id, status, started_at, budget_json) "
-        "VALUES (?,?,?,?,?)",
-        (run_id, scope_id, "running", _now(), json.dumps(budget)),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO runs (run_id, scope_id, status, started_at, budget_json) "
+            "VALUES (?,?,?,?,?)",
+            (run_id, scope_id, "running", _now(), json.dumps(budget)),
+        )
+        conn.commit()
 
 
 def update_run(
     run_id: str, status: str, budget: dict, abort_reason: str | None = None
 ) -> None:
-    conn = connect()
     ended = _now() if status in ("completed", "aborted") else None
-    conn.execute(
-        "UPDATE runs SET status=?, budget_json=?, abort_reason=?, "
-        "ended_at=COALESCE(?, ended_at) WHERE run_id=?",
-        (status, json.dumps(budget), abort_reason, ended, run_id),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            "UPDATE runs SET status=?, budget_json=?, abort_reason=?, "
+            "ended_at=COALESCE(?, ended_at) WHERE run_id=?",
+            (status, json.dumps(budget), abort_reason, ended, run_id),
+        )
+        conn.commit()
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:
-    row = connect().execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
-    return dict(row) if row else None
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        return dict(row) if row else None
 
 
 # -------------------------------------------------------------- findings ---
 def insert_finding(run_id: str, finding: dict) -> None:
-    conn = connect()
-    conn.execute(
-        """INSERT OR REPLACE INTO findings
-           (finding_id, run_id, attack_category, severity, confirmed, provenance,
-            minimized_prompt, mitigation, finding_json, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (
-            finding["finding_id"],
-            run_id,
-            finding.get("attack_category", ""),
-            float(finding.get("severity", 0.0)),
-            1 if finding.get("confirmed") else 0,
-            finding.get("provenance", "live"),
-            finding.get("minimized_prompt"),
-            finding.get("mitigation"),
-            json.dumps(finding),
-            _now(),
-        ),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO findings
+               (finding_id, run_id, attack_category, severity, confirmed, provenance,
+                minimized_prompt, mitigation, finding_json, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                finding["finding_id"],
+                run_id,
+                finding.get("attack_category", ""),
+                float(finding.get("severity", 0.0)),
+                1 if finding.get("confirmed") else 0,
+                finding.get("provenance", "live"),
+                finding.get("minimized_prompt"),
+                finding.get("mitigation"),
+                json.dumps(finding),
+                _now(),
+            ),
+        )
+        conn.commit()
 
 
 def list_findings(run_id: str) -> list[dict[str, Any]]:
-    rows = connect().execute(
-        "SELECT finding_json FROM findings WHERE run_id=? ORDER BY severity DESC",
-        (run_id,),
-    ).fetchall()
-    return [json.loads(r["finding_json"]) for r in rows]
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT finding_json FROM findings WHERE run_id=? ORDER BY severity DESC",
+            (run_id,),
+        ).fetchall()
+        return [json.loads(r["finding_json"]) for r in rows]
 
 
 # ----------------------------------------------------------------- trace ---
 def insert_trace(run_id: str, entry: dict) -> None:
-    conn = connect()
-    conn.execute(
-        """INSERT INTO trace_entries
-           (run_id, node, model, ts, latency_ms, tokens_in, tokens_out, usd,
-            input_json, output_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (
-            run_id,
-            entry["node"],
-            entry["model"],
-            entry["ts"],
-            int(entry["latency_ms"]),
-            int(entry["tokens_in"]),
-            int(entry["tokens_out"]),
-            float(entry["usd"]),
-            json.dumps(entry.get("input"))[:20000],
-            json.dumps(entry.get("output"))[:20000],
-        ),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO trace_entries
+               (run_id, node, model, ts, latency_ms, tokens_in, tokens_out, usd,
+                input_json, output_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_id,
+                entry["node"],
+                entry["model"],
+                entry["ts"],
+                int(entry["latency_ms"]),
+                int(entry["tokens_in"]),
+                int(entry["tokens_out"]),
+                float(entry["usd"]),
+                json.dumps(entry.get("input"))[:20000],
+                json.dumps(entry.get("output"))[:20000],
+            ),
+        )
+        conn.commit()
 
 
 def list_trace(run_id: str) -> list[dict[str, Any]]:
-    rows = connect().execute(
-        "SELECT * FROM trace_entries WHERE run_id=? ORDER BY id", (run_id,)
-    ).fetchall()
-    return [dict(r) for r in rows]
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trace_entries WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ----------------------------------------------------------- interceptor ---
 def insert_interception(run_id: str, call: dict) -> None:
-    conn = connect()
-    conn.execute(
-        """INSERT INTO interceptor_log
-           (run_id, attack_id, turn, tool_name, arguments_json, executed,
-            result_json, flagged, flag_reason, ts)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (
-            run_id,
-            call.get("attack_id"),
-            call.get("turn"),
-            call["tool_name"],
-            json.dumps(call.get("arguments", {})),
-            1 if call.get("executed") else 0,
-            json.dumps(call.get("result")),
-            1 if call.get("flagged") else 0,
-            call.get("flag_reason"),
-            call.get("ts", _now()),
-        ),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO interceptor_log
+               (run_id, attack_id, turn, tool_name, arguments_json, executed,
+                result_json, flagged, flag_reason, ts)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                run_id,
+                call.get("attack_id"),
+                call.get("turn"),
+                call["tool_name"],
+                json.dumps(call.get("arguments", {})),
+                1 if call.get("executed") else 0,
+                json.dumps(call.get("result")),
+                1 if call.get("flagged") else 0,
+                call.get("flag_reason"),
+                call.get("ts", _now()),
+            ),
+        )
+        conn.commit()
 
 
 # ------------------------------------------------------ attack patterns ---
 def get_patterns(target_type: str | None = None) -> list[dict[str, Any]]:
-    conn = connect()
-    if target_type:
-        rows = conn.execute(
-            "SELECT * FROM attack_patterns WHERE target_type=? ORDER BY success_rate DESC",
-            (target_type,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM attack_patterns ORDER BY success_rate DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _db() as conn:
+        if target_type:
+            rows = conn.execute(
+                "SELECT * FROM attack_patterns WHERE target_type=? "
+                "ORDER BY success_rate DESC",
+                (target_type,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM attack_patterns ORDER BY success_rate DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def record_pattern_outcome(
@@ -227,26 +258,26 @@ def record_pattern_outcome(
 ) -> None:
     """Called once per attack after the report gate approves, so a rejected
     report cannot poison cross-run learning."""
-    conn = connect()
-    conn.execute(
-        """INSERT INTO attack_patterns (attack_pattern, target_type, attempts,
-                                        successes, success_rate, updated_at)
-           VALUES (?,?,1,?,?,?)
-           ON CONFLICT(attack_pattern, target_type) DO UPDATE SET
-             attempts = attempts + 1,
-             successes = successes + excluded.successes,
-             success_rate = CAST(successes + excluded.successes AS REAL)
-                            / (attempts + 1),
-             updated_at = excluded.updated_at""",
-        (
-            attack_pattern,
-            target_type,
-            1 if success else 0,
-            1.0 if success else 0.0,
-            _now(),
-        ),
-    )
-    conn.commit()
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO attack_patterns (attack_pattern, target_type, attempts,
+                                            successes, success_rate, updated_at)
+               VALUES (?,?,1,?,?,?)
+               ON CONFLICT(attack_pattern, target_type) DO UPDATE SET
+                 attempts = attempts + 1,
+                 successes = successes + excluded.successes,
+                 success_rate = CAST(successes + excluded.successes AS REAL)
+                                / (attempts + 1),
+                 updated_at = excluded.updated_at""",
+            (
+                attack_pattern,
+                target_type,
+                1 if success else 0,
+                1.0 if success else 0.0,
+                _now(),
+            ),
+        )
+        conn.commit()
 
 
 SEED_PATTERNS = [
@@ -263,12 +294,13 @@ SEED_PATTERNS = [
 
 def seed_patterns() -> None:
     """Seeded so the planner's retrieval returns something on run #1."""
-    conn = connect()
-    for pattern, target, attempts, successes in SEED_PATTERNS:
-        conn.execute(
-            """INSERT OR IGNORE INTO attack_patterns
-               (attack_pattern, target_type, attempts, successes, success_rate, updated_at)
-               VALUES (?,?,?,?,?,?)""",
-            (pattern, target, attempts, successes, successes / attempts, _now()),
-        )
-    conn.commit()
+    with _db() as conn:
+        for pattern, target, attempts, successes in SEED_PATTERNS:
+            conn.execute(
+                """INSERT OR IGNORE INTO attack_patterns
+                   (attack_pattern, target_type, attempts, successes, success_rate,
+                    updated_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (pattern, target, attempts, successes, successes / attempts, _now()),
+            )
+        conn.commit()

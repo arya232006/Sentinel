@@ -128,7 +128,7 @@ def _execute(session: RunSession, scope: dict) -> None:
         session.status = "running"
         session.emit("status", {"status": "running"})
 
-        graph.invoke(state, cfg)
+        _drive(session, graph, cfg, state)
         _pump(session, graph, cfg)
 
         final = graph.get_state(cfg).values
@@ -179,24 +179,68 @@ def _pump(session: RunSession, graph, cfg) -> None:
             raise RuntimeError("interrupt pump exceeded 60 iterations")
 
         decision = session.await_resume(payloads[0])
-        graph.invoke(Command(resume=decision), cfg)
-        _emit_progress(session, graph.get_state(cfg).values)
+        _drive(session, graph, cfg, Command(resume=decision))
 
 
-def _emit_progress(session: RunSession, values: dict) -> None:
-    if values.get("attack_plan"):
-        session.emit("plan", {"attacks": values["attack_plan"]})
-    if values.get("recon_profile"):
-        session.emit("recon", values["recon_profile"])
-    if values.get("current_attack_transcript"):
-        session.emit("transcript", {
-            "attack_idx": values.get("current_attack_idx"),
-            "turns": values["current_attack_transcript"],
+def _drive(session: RunSession, graph, cfg, payload) -> None:
+    """Stream the graph, translating each node's state delta into typed events
+    as that node completes.
+
+    DESIGN.md 14 specifies streaming here, and it is load-bearing for the UI:
+    with graph.invoke() the plan, transcript and findings only surface in a
+    burst at the next interrupt, so the live panels sit empty through the whole
+    attack cycle - precisely the part of a run worth watching.
+    """
+    for chunk in graph.stream(payload, cfg, stream_mode="updates"):
+        if not isinstance(chunk, dict):
+            continue
+        for node_name, update in chunk.items():
+            if node_name == "__interrupt__" or not isinstance(update, dict):
+                continue
+            _emit_update(session, node_name, update)
+
+
+def _emit_update(session: RunSession, node: str, update: dict) -> None:
+    """Translate one node's delta into typed events.
+
+    Only fields the node actually wrote are emitted. That is what stops the
+    whole accumulated state being re-sent on every hop - findings used to
+    arrive once per gate, so a two-finding run delivered four finding events.
+    """
+    if update.get("attack_plan"):
+        session.emit("plan", {"attacks": update["attack_plan"]})
+    if update.get("recon_profile"):
+        session.emit("recon", update["recon_profile"])
+    if update.get("current_attack_transcript"):
+        # Emitted twice per turn by design: once when send_to_target appends the
+        # probe/response pair, once when judge_outcome annotates it with the
+        # verdict. Turns carry attack_id, so the client upserts rather than
+        # appends. next_attack clears the transcript, which is falsy and so
+        # emits nothing - the client keeps prior attacks grouped by attack_id.
+        session.emit("transcript", {"node": node, "turns": update["current_attack_transcript"]})
+    if "current_attack_idx" in update:
+        session.emit("cursor", {"attack_idx": update["current_attack_idx"]})
+    if node == "decide_router" and update.get("_route"):
+        # Surfacing the router's choice makes the control flow visible: this is
+        # the graph deciding to escalate/pivot/advance, not a hidden while-loop.
+        session.emit("route", {
+            "route": update["_route"],
+            "escalation": update.get("pending_escalation") or {},
         })
-    for f in values.get("findings", []):
+    for call in update.get("interceptor_log") or []:
+        session.emit("intercept", call)
+    for f in update.get("findings") or []:
+        # verify emits the raw finding, score re-emits it enriched with severity
+        # and mitigation. The client upserts on finding_id, so a finding appears
+        # as soon as it is verified and gains its score a moment later.
         session.emit("finding", f)
-    if values.get("budget"):
-        session.emit("budget", values["budget"])
+    if update.get("budget"):
+        session.emit("budget", update["budget"])
+    if update.get("status") in ("aborted", "completed"):
+        session.emit("status", {
+            "status": update["status"],
+            "abort_reason": update.get("abort_reason"),
+        })
 
 
 def _on_trace(session: RunSession, entry: dict) -> None:

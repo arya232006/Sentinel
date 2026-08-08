@@ -13,6 +13,9 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
     "aiosqlite>=0.20.0",
+    # Sandboxed vector store for the rag_agent target. Imported unguarded by
+    # targets/rag_agent.py, so without it that target 500s on every call.
+    "chromadb>=0.5",
 ]
 
 [project.optional-dependencies]

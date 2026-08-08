@@ -225,6 +225,19 @@ _PLAN_TEMPLATES = {
 }
 
 
+# Which refusal-map facet each category probes. Keys match the refusal_map the
+# fake recon profile emits, so offline runs carry the same attack -> facet link
+# the real planner is asked to produce.
+_PLAN_FACETS = {
+    "authority_impersonation": "account details",
+    "multiturn_erosion": "account details",
+    "tool_parameter_hijacking": "internal policy",
+    "rag_context_poisoning": "internal policy",
+    "indirect_injection": "internal policy",
+    "direct_jailbreak": "violence",
+}
+
+
 def _fake_plan(messages: list[dict]) -> AttackPlan:
     """Plan only within the categories the request authorizes, mirroring the
     real planner's constraint."""
@@ -246,6 +259,7 @@ def _fake_plan(messages: list[dict]) -> AttackPlan:
                 rationale=rationale,
                 retrieved_basis=basis,
                 priority="high" if i <= 2 else "medium",
+                target_facet=_PLAN_FACETS.get(cat, ""),
             )
         )
     return AttackPlan(attacks=attacks)

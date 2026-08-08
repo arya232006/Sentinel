@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+/*
+ * Sentinel console — dark only, by choice. This is an operator tool that lives
+ * next to a terminal; a single committed treatment beats two half-tuned ones.
+ *
+ * One semantic worth stating, because it inverts the usual convention: a
+ * *succeeded* attack is a bad outcome (the target leaked) and reads red, while
+ * a *failed* attack means the target held the line and reads green.
+ */
+
+@theme {
+  --color-bg: #08090b;
+  --color-surface: #0e1014;
+  --color-surface-2: #141821;
+  --color-surface-3: #1a1f2a;
+  --color-line: #1f242e;
+  --color-line-soft: #171b23;
+
+  --color-ink: #e7eaf0;
+  --color-ink-dim: #a8b0bf;
+  --color-ink-mute: #6b7484;
+
+  --color-accent: #2ee6cd;
+  --color-accent-dim: #16897b;
+
+  --color-crit: #ff4d5e;
+  --color-high: #ff8f3f;
+  --color-med: #ffc93d;
+  --color-low: #5b9cff;
+  --color-good: #35d07f;
+  --color-info: #8b7dff;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, -apple-system, "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04";
+}
+
+/* A faint grid keeps large empty panels from reading as broken. */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, #ffffff06 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff06 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Slim scrollbars — panels scroll a lot in a live run. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #29303d;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.live-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.enter {
+  animation: slide-in 0.22s ease-out;
+}
+
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 33%;
+  background: linear-gradient(90deg, transparent, #2ee6cd22, transparent);
+  animation: sweep 1.8s linear infinite;
+}
+
+/* Long probe/response text must wrap rather than force the panel to scroll. */
+.wrap-any {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ---------------------------------------------------------------------------
+   Engagement view.
+   Each effect is keyed on a React node so remounting replays it; none of them
+   loop except the idle states, so a finished run settles rather than throbbing.
+   --------------------------------------------------------------------------- */
+
+@keyframes beam-travel {
+  from { stroke-dashoffset: var(--beam-len, 620); }
+  to   { stroke-dashoffset: 0; }
+}
+.beam-travel {
+  stroke-dasharray: var(--beam-len, 620);
+  animation: beam-travel var(--beam-ms, 700ms) cubic-bezier(0.4, 0, 0.5, 1) forwards;
+}
+
+@keyframes tracer-run {
+  from { offset-distance: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  to   { offset-distance: 100%; opacity: 1; }
+}
+.tracer {
+  animation: tracer-run var(--beam-ms, 700ms) cubic-bezier(0.4, 0, 0.5, 1) forwards;
+}
+
+@keyframes impact-burst {
+  from { r: 6; opacity: 0.9; stroke-width: 4; }
+  to   { r: 62; opacity: 0; stroke-width: 0.5; }
+}
+.impact-burst { animation: impact-burst 620ms ease-out forwards; }
+
+@keyframes charge-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50%      { opacity: 0.75; transform: scale(1.06); }
+}
+.charge-pulse {
+  animation: charge-pulse 1.9s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes radar-sweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.radar-sweep {
+  animation: radar-sweep 4.5s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes log-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.log-in { animation: log-in 0.18s ease-out; }
+
+@keyframes hold-flash {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+.hold-flash { animation: hold-flash 1.1s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .beam-travel, .tracer, .impact-burst, .charge-pulse,
+  .radar-sweep, .log-in, .hold-flash, .live-dot, .sweep::after {
+    animation: none !important;
+  }
+  .beam-travel { stroke-dashoffset: 0; }
+}

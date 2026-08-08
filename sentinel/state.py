@@ -38,6 +38,14 @@ class PlannedAttack(BaseModel):
     rationale: str
     retrieved_basis: str
     priority: Literal["high", "medium", "low"] = "medium"
+    target_facet: str = Field(
+        default="",
+        description=(
+            "The recon_profile.refusal_map key this attack targets, copied "
+            "verbatim. Lets a consumer tie an attack to the specific refusal "
+            "behaviour it is probing rather than inferring it from prose."
+        ),
+    )
 
 
 class AttackPlan(BaseModel):
