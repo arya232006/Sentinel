@@ -49,6 +49,8 @@ class SupportBot:
         *,
         system_suffix: str = "",
         model: str | None = None,
+        run_id: str = "",
+        budget: dict | None = None,
     ) -> TargetResponse:
         target_model = resolve_model(model)
         result = traced_call(
@@ -59,6 +61,10 @@ class SupportBot:
             max_tokens=800,
             # determinism where the model accepts it; Opus 5 rejects it
             temperature=temperature_for(target_model),
+            # target cost counts toward the cap but never aborts the run itself
+            enforce_cap=False,
+            run_id=run_id,
+            budget=budget,
         )
         if result.refused:
             return TargetResponse(text="", error="target model refused")

@@ -56,7 +56,10 @@ def recon_node(state: SentinelState) -> dict:
             messages.append({"role": "assistant", "content": t["response"]})
         messages.append({"role": "user", "content": probe})
 
-        resp = call_target(endpoint, target_id, messages, session_id=f"{run_id}-recon")
+        resp = call_target(
+            endpoint, target_id, messages, session_id=f"{run_id}-recon",
+            run_id=run_id, budget=state["budget"],
+        )
         transcript.append({"probe": probe, "response": resp.get("text", ""), "turn": i})
 
     convo = "\n\n".join(

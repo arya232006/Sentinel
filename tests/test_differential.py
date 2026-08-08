@@ -23,12 +23,15 @@ def baseline(make_scope):
 
 
 # ------------------------------------------------------- model parameters ---
-def test_opus5_is_not_sent_a_temperature():
-    """Opus 5 rejects `temperature` with a 400. A differential that includes it
-    must omit the parameter rather than crash the run."""
-    assert temperature_for("claude-opus-5") is None
+def test_only_haiku_is_sent_a_temperature():
+    """The Claude 5 reasoning models all reject `temperature` with a 400
+    (measured live on Sonnet 5, not just Opus 5). A differential that includes
+    them must omit the parameter rather than crash the run - only Haiku gets it."""
     assert temperature_for("claude-haiku-4-5") == 0.0
-    assert temperature_for("claude-sonnet-5") == 0.0
+    assert temperature_for("claude-opus-5") is None
+    assert temperature_for("claude-sonnet-5") is None
+    assert temperature_for("claude-opus-4-8") is None
+    assert temperature_for("claude-fable-5") is None
 
 
 def test_a_differential_including_opus_does_not_raise(baseline):

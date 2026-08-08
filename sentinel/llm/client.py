@@ -213,6 +213,7 @@ def traced_call(
     temperature: float | None = None,
     use_fallbacks: bool = False,
     allow_refusal_fallback: bool = True,
+    enforce_cap: bool = True,
     run_id: str = "",
     budget: dict[str, Any] | None = None,
 ) -> LLMResult:
@@ -221,6 +222,13 @@ def traced_call(
     `temperature` is only valid for the target harness (Haiku 4.5). Passing it
     with an Opus 5 model is a programming error and raises here rather than
     producing an opaque 400 from the API.
+
+    `enforce_cap=False` records and traces the call but skips the pre-flight
+    raise. The target harness uses it: target cost MUST count toward the budget
+    (so the cap is real and the reported total is honest - a differential audit
+    runs the target on Opus 5), but a target call must not itself abort the run
+    with BudgetExceeded from inside a node the graph doesn't guard. The cap is
+    still enforced, just at the next Sentinel-side pre-flight instead of here.
     """
     if (
         temperature is not None
@@ -247,7 +255,7 @@ def traced_call(
         # attacker guardrail; see sentinel/llm/openai_adapter.py.
         from sentinel.llm.openai_adapter import openai_call
 
-        if budget is not None:
+        if budget is not None and enforce_cap:
             budget_mod.check(budget, 0.02)  # coarse pre-flight; no count_tokens API parity
         result = openai_call(
             node=node, model=model, system=system, messages=messages,
@@ -273,7 +281,7 @@ def traced_call(
         est_in = sum(len(str(m.get("content", ""))) for m in messages) // 3
 
     # 2. hard budget gate --------------------------------------------------
-    if budget is not None:
+    if budget is not None and enforce_cap:
         budget_mod.check(budget, pricing.estimate_cost(model, est_in, max_tokens))
 
     # 3. the call ----------------------------------------------------------

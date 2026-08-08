@@ -82,6 +82,8 @@ def verify_node(state: SentinelState) -> dict:
                 replay_messages(conversation, trigger),
                 session_id=f"{run_id}-verify-{uuid.uuid4().hex[:6]}",
                 attack_id=aid,
+                run_id=run_id,
+                budget=state["budget"],
             )
             verdict, trace = judge_response(
                 run_id=run_id,
@@ -259,6 +261,8 @@ def _still_triggers(
         replay_messages(conversation or [], trigger, probe_override=candidate),
         session_id=f"{run_id}-min-{uuid.uuid4().hex[:6]}",
         attack_id=attack_id,
+        run_id=run_id,
+        budget=budget,
     )
     verdict, trace = judge_response(
         run_id=run_id,

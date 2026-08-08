@@ -41,6 +41,8 @@ def send_to_target_node(state: SentinelState) -> dict:
         session_id=f"{run_id}-{pending['attack_id']}",
         attack_id=pending["attack_id"],
         turn=turn,
+        run_id=run_id,
+        budget=state.get("budget"),
     )
 
     tool_calls = resp.get("tool_calls", []) or []
