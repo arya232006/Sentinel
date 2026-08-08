@@ -1,0 +1,65 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\__main__.py", line 8, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\cli.py", line 209, in main
+    return args.func(args)
+           ~~~~~~~~~^^^^^^
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\cli.py", line 86, in cmd_diff
+    result = differential.run_differential(
+        baseline,
+    ...<4 lines>...
+        max_usd=args.max_usd,
+    )
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\differential.py", line 116, in run_differential
+    outcome = replay_finding(
+        f,
+    ...<6 lines>...
+        label="diff",
+    )
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\replay.py", line 110, in replay_finding
+    resp = call_target(
+        endpoint,
+    ...<7 lines>...
+        budget=budget,
+    )
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\graph\transport.py", line 50, in call_target
+    return _call_inproc(
+        endpoint, messages, session_id, attack_id, turn, system_suffix, model,
+        run_id, budget,
+    )
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\graph\transport.py", line 151, in _call_inproc
+    resp = target.chat(messages, **kwargs)
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\targets\tool_agent.py", line 62, in chat
+    result = traced_call(
+        node=f"target:{self.target_id}",
+    ...<8 lines>...
+        budget=budget,
+    )
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\llm\client.py", line 302, in traced_call
+    response, parse_error = _invoke(client, kwargs, output_format, use_fallbacks)
+                            ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYADEEP\Desktop\SENTINEL\sentinel\llm\client.py", line 176, in _invoke
+    return client.messages.create(**kwargs), None
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\ARYADEEP\miniconda3\Lib\site-packages\anthropic\_utils\_utils.py", line 294, in wrapper
+    return func(*args, **kwargs)
+  File "C:\Users\ARYADEEP\miniconda3\Lib\site-packages\anthropic\resources\messages\messages.py", line 1050, in create
+    return self._post(
+           ~~~~~~~~~~^
+        "/v1/messages",
+        ^^^^^^^^^^^^^^^
+    ...<30 lines>...
+        stream_cls=Stream[RawMessageStreamEvent],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\ARYADEEP\miniconda3\Lib\site-packages\anthropic\_base_client.py", line 1536, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ARYADEEP\miniconda3\Lib\site-packages\anthropic\_base_client.py", line 1195, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': '`temperature` is deprecated for this model.'}, 'request_id': 'req_011Cdq38X4oFmHyBQpJu2tNy'}
+EXIT=1

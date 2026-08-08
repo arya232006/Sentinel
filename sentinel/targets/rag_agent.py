@@ -105,6 +105,8 @@ class RagAgent:
         *,
         system_suffix: str = "",
         model: str | None = None,
+        run_id: str = "",
+        budget: dict | None = None,
     ) -> TargetResponse:
         query = ""
         for m in reversed(messages):
@@ -137,6 +139,9 @@ class RagAgent:
             messages=augmented,
             max_tokens=800,
             temperature=temperature_for(target_model),
+            enforce_cap=False,
+            run_id=run_id,
+            budget=budget,
         )
         if result.refused:
             return TargetResponse(text="", error="target model refused", retrieved_docs=list(ids))

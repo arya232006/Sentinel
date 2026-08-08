@@ -13,6 +13,17 @@ load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _int_env(name: str, default: int) -> int:
+    """Env override for an integer knob, falling back to the default on unset
+    or unparseable. Lets a demo trade thoroughness for speed/cost without code
+    edits (e.g. SENTINEL_MAX_ATTACKS=3), while leaving the shipped defaults -
+    and the test suite, which does not set these - untouched."""
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 # --------------------------------------------------------------------------
 # Models
 #
@@ -25,11 +36,17 @@ JUDGE_MODEL = "claude-opus-5"
 TARGET_MODEL = "claude-haiku-4-5"
 FRONTIER_TARGET_MODEL = "claude-opus-5"  # bonus target, cassette-replay only
 
-# Effort per node. The judge ships at medium and only drops to low if the
-# eval sweep shows F1 is statistically indistinguishable (DESIGN.md 18.2).
-EFFORT_ATTACKER = "high"
-EFFORT_JUDGE = "medium"
-EFFORT_SCORING = "medium"
+# Effort per node, env-overridable so a live demo can trade thoroughness for
+# speed (a full high-effort audit is ~26 min).
+#
+# The judge ships at LOW. The doctrine was "medium unless low ties" - and the
+# measured sweep (30 cases, low/med/high) showed low ties medium EXACTLY:
+# identical precision 0.917 / recall 1.000 / F1 0.957, and low handled the
+# ambiguous cases marginally better. So the gating node runs at low: same
+# measured accuracy, cheaper and faster on the highest-volume call.
+EFFORT_ATTACKER = os.getenv("SENTINEL_EFFORT_ATTACKER", "high")
+EFFORT_JUDGE = os.getenv("SENTINEL_EFFORT_JUDGE", "low")
+EFFORT_SCORING = os.getenv("SENTINEL_EFFORT_SCORING", "medium")
 
 # Server-side refusal fallback, for non-structured calls only.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -47,11 +64,14 @@ FALLBACK_MODEL = os.getenv("SENTINEL_FALLBACK_MODEL", "claude-opus-4-8")
 
 
 # --------------------------------------------------------------------------
-# Hard caps. No unbounded loops anywhere.
+# Hard caps. No unbounded loops anywhere. The first three are env-overridable
+# for demo pacing (e.g. SENTINEL_MAX_ATTACKS=3 SENTINEL_PER_ATTACK_TURN_CAP=3
+# turns a ~26 min audit into a few minutes); the rest are correctness-bearing
+# and stay fixed.
 # --------------------------------------------------------------------------
-RECON_MAX_TURNS = 10
-PER_ATTACK_TURN_CAP = 6
-MAX_ATTACKS_PER_RUN = 12
+RECON_MAX_TURNS = _int_env("SENTINEL_RECON_MAX_TURNS", 10)
+PER_ATTACK_TURN_CAP = _int_env("SENTINEL_PER_ATTACK_TURN_CAP", 6)
+MAX_ATTACKS_PER_RUN = _int_env("SENTINEL_MAX_ATTACKS", 12)
 VERIFY_RERUNS = 3
 VERIFY_MAJORITY = 2
 MAX_MINIMIZATION_STEPS = 8
@@ -186,14 +206,20 @@ def run_provenance() -> str:
 
 
 def accepts_temperature(model: str) -> bool:
-    """Opus 5 rejects `temperature` (and top_p/top_k) with a 400.
+    """Whether `temperature` may be sent to this model.
 
-    The single source of truth for that constraint. Callers that pick a model
-    at runtime - the differential audit runs the same target harness on Haiku,
-    Sonnet and Opus - must consult this rather than assuming the target model
-    always takes a temperature.
+    The single source of truth for the constraint. Only the Haiku family still
+    takes an explicit temperature; the Claude 5 reasoning models (Opus 5,
+    Sonnet 5, Fable 5) and the Opus 4.x line deprecate it and return a 400 if
+    it is sent. MEASURED: a differential run sent temperature=0 to a Sonnet 5
+    target and got "`temperature` is deprecated for this model."
+
+    Allow-list rather than deny-list on purpose: sending temperature to a model
+    that rejects it is a hard failure, while omitting it from one that accepts
+    it only costs determinism. Erring toward omission is the safe direction, and
+    it is what lets the differential audit run the target on any model.
     """
-    return not model.startswith("claude-opus-5")
+    return model.startswith("claude-haiku")
 
 
 def api_key() -> str | None:

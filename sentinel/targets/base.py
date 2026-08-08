@@ -36,6 +36,8 @@ class TargetAgent(Protocol):
         *,
         system_suffix: str = "",
         model: str | None = None,
+        run_id: str = "",
+        budget: dict[str, Any] | None = None,
     ) -> TargetResponse: ...
 
 

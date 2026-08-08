@@ -115,6 +115,8 @@ def replay_finding(
             attack_id=attack_id,
             system_suffix=system_suffix,
             model=model,
+            run_id=run_id,
+            budget=budget,
         )
         outcome.reruns += 1
 

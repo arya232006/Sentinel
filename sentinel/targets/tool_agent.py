@@ -50,6 +50,8 @@ class ToolAgent:
         *,
         system_suffix: str = "",
         model: str | None = None,
+        run_id: str = "",
+        budget: dict | None = None,
     ) -> TargetResponse:
         convo = list(messages)
         final_text = ""
@@ -65,6 +67,9 @@ class ToolAgent:
                 max_tokens=1024,
                 tools=TOOL_SCHEMAS,
                 temperature=temperature_for(target_model),
+                enforce_cap=False,
+                run_id=run_id,
+                budget=budget,
             )
             if result.refused:
                 return TargetResponse(text="", error="target model refused")

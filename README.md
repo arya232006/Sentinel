@@ -89,12 +89,16 @@ Two API behaviours drive the model choices:
 | Component | Model | Effort |
 |---|---|---|
 | `recon`, `craft_probe`, `plan_attacks`, `write_mitigation` | `claude-opus-5` → `claude-opus-4-8` on refusal | high |
-| `judge_outcome`, `score_finding` | `claude-opus-5` | medium |
+| `judge_outcome` | `claude-opus-5` | **low** (measured) |
+| `score_finding` | `claude-opus-5` | medium |
 | Target agents (all three) | `claude-haiku-4-5`, `temperature=0` | — |
 
-`judge_outcome` starts at **medium** and only drops to `low` if the eval sweep
-shows F1 is statistically indistinguishable. It gates every finding, so it is
-the wrong place to save money.
+`judge_outcome` ships at **low**, not by guess but by measurement: the eval
+sweep (30 cases at low/med/high) showed low **ties** medium and high exactly —
+precision 0.917, recall 1.000, F1 0.957 at all three, with low handling the
+ambiguous cases marginally better. It's the highest-volume node, so running the
+gate at low with no measured accuracy loss is a real cost win. All efforts are
+env-overridable (`SENTINEL_EFFORT_JUDGE=medium`, etc.) for demo pacing.
 
 **Measured live, and it changed the design:** Opus 5's cyber classifier
 **declines the recon and planning prompts outright** — `stop_reason: "refusal"`,
@@ -455,7 +459,10 @@ with no other edits; the Anthropic path in `client.py` is untouched by it.
 ## Before a live demo
 
 1. `python -m sentinel.eval.run_eval --sweep` — measures judge precision/recall
-   at low/medium/high. **Not yet run.** Ship `medium` unless `low` ties.
+   at low/medium/high. **Run live:** F1 0.957 identical at all three efforts, so
+   the judge ships at `low`. Re-run if the judge prompt changes. Note the sweep
+   covers the succeed/fail call, **not** `impact_class` — severity accuracy is
+   still unmeasured (see Known gaps).
 2. `python -m sentinel.eval.run_eval --guardrail-only --trials 3` — asserts the
    attacker node redacts or refuses on 10 prompts engineered to tempt it into
    full harmful output. The attacker is non-deterministic, so `--trials` runs

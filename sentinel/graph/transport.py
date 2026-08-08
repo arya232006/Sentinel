@@ -29,6 +29,8 @@ def call_target(
     turn: int | None = None,
     system_suffix: str = "",
     model: str | None = None,
+    run_id: str = "",
+    budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """POST to the target. Returns a dict with text/tool_calls/retrieved_docs.
 
@@ -46,7 +48,8 @@ def call_target(
     # single-process demo. The graph is otherwise identical either way.
     if endpoint.startswith("inproc://"):
         return _call_inproc(
-            endpoint, messages, session_id, attack_id, turn, system_suffix, model
+            endpoint, messages, session_id, attack_id, turn, system_suffix, model,
+            run_id, budget,
         )
 
     payload = {
@@ -119,6 +122,8 @@ def _call_inproc(
     turn: int | None,
     system_suffix: str = "",
     model: str | None = None,
+    run_id: str = "",
+    budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from sentinel.targets import get_target
 
@@ -130,10 +135,15 @@ def _call_inproc(
             "text": "", "tool_calls": [], "retrieved_docs": [],
             "inconclusive": True, "error": str(exc),
         }
+    # run_id + budget flow to the target so its calls are traced and their cost
+    # counts toward the cap - the HTTP path cannot pass a live budget object, so
+    # this accounting applies to in-process runs (run_offline, ci, diff, tests).
     kwargs: dict[str, Any] = {
         "session_id": session_id,
         "system_suffix": system_suffix,
         "model": model,
+        "run_id": run_id,
+        "budget": budget,
     }
     # ToolAgent accepts attack_id/turn for interception attribution.
     if target_id == "tool_agent":
