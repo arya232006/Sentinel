@@ -5,6 +5,7 @@ import sectionImg from "@/public/section.jpeg";
 import feature2Img from "@/public/feature2.webp";
 import feature3Img from "@/public/feature3.webp";
 import { Arrow } from "./Arrow";
+import { NAV_LINKS } from "./links";
 
 /**
  * Narrative bands between the hero and the console.
@@ -446,16 +447,61 @@ export function Threats() {
   );
 }
 
+/**
+ * The closing statement, set in type rather than over artwork.
+ *
+ * Every band above this one either is a photograph or sits next to one, so the
+ * page ends on the opposite: white, one line of serif, and nothing competing
+ * with it. That is also why it carries a top rule where Field and Threats run
+ * edge to edge — it needs to read as the end of the page, not another band.
+ *
+ * The authorized-testing notice keeps its own line at the end. It is the one
+ * piece of the old footer that was load-bearing — the tool is an attacker, and
+ * the terms it may be run under are not decoration, so it is set at a size
+ * somebody might actually read rather than as 10px mono.
+ */
 export function Footer() {
   return (
-    <footer className="border-t border-line bg-bg">
-      <div className="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-10 sm:flex-row sm:items-center sm:justify-between">
-        <p className="font-mono text-[11px] text-ink-mute">
-          Sentinel — authorized testing only.
-        </p>
-        <p className="max-w-md font-mono text-[10px] leading-relaxed text-ink-mute">
-          Run it against targets you own or have written permission to test.
-        </p>
+    <footer className="border-t border-line bg-surface">
+      <div className="mx-auto max-w-6xl px-6 py-20 sm:py-24">
+        <div className="mx-auto max-w-2xl text-center">
+          <p className="font-serif text-[clamp(1.8rem,4.2vw,3rem)] leading-[1.1] text-ink">
+            We&rsquo;re building the adversary you would rather meet in private.
+          </p>
+          <Link
+            href="/console"
+            className="group mt-8 inline-flex items-center gap-2 border-b border-ink/25 pb-1 text-[14px] text-ink transition hover:border-ink"
+          >
+            If that sounds like something you need, start an audit
+            <Arrow className="bg-ink/10 group-hover:bg-ink/20" />
+          </Link>
+        </div>
+
+        <div className="mt-20 flex flex-col gap-8 border-t border-line pt-8 sm:flex-row sm:justify-between">
+          <nav className="flex flex-wrap gap-x-6 gap-y-2">
+            {NAV_LINKS.map((l) => {
+              const Tag = l.href.startsWith("#") ? "a" : Link;
+              return (
+                <Tag
+                  key={l.href}
+                  href={l.href}
+                  className="text-[13.5px] text-ink-dim transition hover:text-ink"
+                >
+                  {l.label}
+                </Tag>
+              );
+            })}
+          </nav>
+
+          <div className="max-w-sm sm:text-right">
+            <p className="text-[13px] text-ink-dim">
+              Sentinel — authorized testing only.
+            </p>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-ink-mute">
+              Run it against targets you own, or have written permission to test.
+            </p>
+          </div>
+        </div>
       </div>
     </footer>
   );

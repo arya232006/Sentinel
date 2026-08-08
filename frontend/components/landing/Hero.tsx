@@ -5,21 +5,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import heroImg from "@/public/hero.png";
 import { Arrow } from "./Arrow";
+import { NAV_LINKS as LINKS } from "./links";
 import { Mark } from "@/components/Mark";
-
-/**
- * In page order, so the nav reads as a table of contents rather than a menu.
- *
- * The last one leaves the page. That distinction is rendered, not cosmetic: a
- * hash has to stay a plain <a> so Lenis's anchor handling gets the click, while
- * a route wants next/link for the client transition — and Link on a bare hash
- * would run its own shallow scroll against Lenis for the same property.
- */
-const LINKS = [
-  { href: "#adversary", label: "Why an adversary" },
-  { href: "#threats", label: "What it finds" },
-  { href: "/console", label: "Console" },
-];
 
 /**
  * The wall clock is an external system, so it is subscribed to rather than
