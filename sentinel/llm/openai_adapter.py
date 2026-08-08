@@ -171,6 +171,50 @@ _FINISH_MAP = {
 }
 
 
+# --------------------------------------------------------------------------
+# Structured output.
+#
+# OpenAI's *strict* mode cannot express two things the Sentinel schemas use:
+#   - open-ended maps (ReconProfile.refusal_map is dict[str, str], which emits
+#     `additionalProperties: {"type": "string"}`; strict mode demands
+#     `additionalProperties: false`)
+#   - numeric bounds (JudgeVerdict.confidence carries ge/le -> minimum/maximum)
+#
+# So this adapter uses non-strict `json_schema` and validates client-side. The
+# Anthropic path is unaffected and keeps its real schema guarantee; here the
+# schema is a strong hint plus a validation step, which is the right trade for
+# a shakedown harness. A single repair retry covers the occasional model that
+# returns prose around its JSON.
+# --------------------------------------------------------------------------
+def _response_format(model: type[BaseModel]) -> dict:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": model.__name__,
+            "schema": model.model_json_schema(),
+            "strict": False,
+        },
+    }
+
+
+def _extract_json(text: str) -> str:
+    """Pull a JSON object out of a response that may be fenced or prefaced."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.split("```")[1] if "```" in t[3:] else t.lstrip("`")
+        if t.lstrip().lower().startswith("json"):
+            t = t.lstrip()[4:]
+    start, end = t.find("{"), t.rfind("}")
+    return t[start : end + 1] if start != -1 and end > start else t
+
+
+def _validate(model: type[BaseModel], text: str) -> BaseModel | None:
+    try:
+        return model.model_validate_json(_extract_json(text))
+    except Exception:
+        return None
+
+
 def openai_call(
     *,
     node: str,
@@ -201,7 +245,29 @@ def openai_call(
 
     t0 = time.perf_counter()
     if output_format is not None:
-        response = client.chat.completions.parse(response_format=output_format, **kwargs)
+        try:
+            response = client.chat.completions.create(
+                response_format=_response_format(output_format), **kwargs
+            )
+        except Exception as exc:
+            # Any schema the endpoint won't accept (nested $defs/$ref, an
+            # unsupported keyword) degrades to plain JSON mode with the schema
+            # inlined in the prompt, rather than killing the run with a 400.
+            if "response_format" not in str(exc) and "schema" not in str(exc).lower():
+                raise
+            fallback = list(oa_messages)
+            fallback[0] = {
+                "role": "system",
+                "content": (
+                    f"{system}\n\nReturn ONLY a JSON object conforming to this "
+                    f"schema. No prose, no code fences.\n"
+                    f"{json.dumps(output_format.model_json_schema())}"
+                ),
+            }
+            response = client.chat.completions.create(
+                **{**kwargs, "messages": fallback},
+                response_format={"type": "json_object"},
+            )
     else:
         response = client.chat.completions.create(**kwargs)
     latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -214,7 +280,30 @@ def openai_call(
     refusal = getattr(msg, "refusal", None)
     refused = bool(refusal) or choice.finish_reason == "content_filter"
 
-    parsed = getattr(msg, "parsed", None) if output_format is not None else None
+    extra_in = extra_out = 0
+    parsed = None
+    if output_format is not None and not refused:
+        parsed = _validate(output_format, msg.content or "")
+        if parsed is None:
+            # One repair attempt: hand the model its own output and the schema
+            # and ask for JSON only. Cheap on mini, and it keeps a single bad
+            # generation from failing an entire attack.
+            repair = client.chat.completions.create(
+                model=oa_model,
+                messages=[
+                    {"role": "system", "content":
+                     "Return ONLY a JSON object matching the schema. No prose, no code fences."},
+                    {"role": "user", "content":
+                     f"Schema:\n{json.dumps(output_format.model_json_schema())}\n\n"
+                     f"Fix this into valid JSON matching the schema:\n{msg.content or ''}"},
+                ],
+                response_format=_response_format(output_format),
+                max_completion_tokens=max_tokens,
+            )
+            ru = getattr(repair, "usage", None)
+            extra_in = int(getattr(ru, "prompt_tokens", 0) or 0)
+            extra_out = int(getattr(ru, "completion_tokens", 0) or 0)
+            parsed = _validate(output_format, repair.choices[0].message.content or "")
 
     content_blocks: list[dict] = []
     for tc in getattr(msg, "tool_calls", None) or []:
@@ -227,8 +316,8 @@ def openai_call(
         )
 
     usage = getattr(response, "usage", None)
-    tin = int(getattr(usage, "prompt_tokens", 0) or 0)
-    tout = int(getattr(usage, "completion_tokens", 0) or 0)
+    tin = int(getattr(usage, "prompt_tokens", 0) or 0) + extra_in
+    tout = int(getattr(usage, "completion_tokens", 0) or 0) + extra_out
     in_rate, out_rate = OPENAI_PRICING.get(oa_model, _DEFAULT_RATE)
     usd = round((tin * in_rate + tout * out_rate) / 1_000_000, 8)
 

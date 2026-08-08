@@ -87,7 +87,7 @@ def craft_probe_node(state: SentinelState) -> dict:
                 ),
             }
         ],
-        max_tokens=1500,
+        max_tokens=4000,
         effort=config.EFFORT_ATTACKER,
         output_format=ProbeDraft,
         use_fallbacks=False,  # parse+fallbacks not combinable; see note below
@@ -100,7 +100,12 @@ def craft_probe_node(state: SentinelState) -> dict:
     # we record it as a first-class outcome. A dedicated non-structured retry
     # with fallbacks could be added, but a refused probe simply advances the
     # turn rather than aborting.
-    if result.refused:
+    # Two ways no probe comes back, and both must advance the turn rather than
+    # abort: the model refused, or its structured output was unparsable (a
+    # response truncated by max_tokens - traced_call retries once and then
+    # degrades to parsed=None rather than raising). Either way this attack loses
+    # a turn; the run does not lose the audit.
+    if result.refused or result.parsed is None:
         return {
             "current_attack_transcript": transcript
             + [
@@ -110,7 +115,11 @@ def craft_probe_node(state: SentinelState) -> dict:
                     "refused": True,
                     "refusal_category": result.refusal_category,
                     "turn": state["current_attack_turn"],
-                    "note": "attacker model refused to craft this probe",
+                    "note": (
+                        "attacker model refused to craft this probe"
+                        if result.refused
+                        else f"no usable probe (stop_reason={result.stop_reason})"
+                    ),
                 }
             ],
             "trace_log": [result.trace],

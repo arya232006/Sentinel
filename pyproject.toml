@@ -15,6 +15,9 @@ dependencies = [
     "aiosqlite>=0.20.0",
 ]
 
+[project.scripts]
+sentinel = "sentinel.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 

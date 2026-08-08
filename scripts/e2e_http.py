@@ -15,8 +15,12 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
+
+# Run as `python scripts/e2e_http.py`, so the repo root is not on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 CATEGORIES = {
     "support_bot": ["authority_impersonation", "multiturn_erosion"],
@@ -120,15 +124,51 @@ def main() -> int:
             c = f["corroborating_call"]
             print(f"    intercept: {c.get('tool_name')}({c.get('arguments')})")
         print(f"    mitigation: {(f.get('mitigation') or '')[:150]}")
+        fv = f.get("fix_verification") or {}
+        if fv.get("status"):
+            print(f"    FIX      : {fv['status']} - {fv.get('note', fv.get('reason', ''))}")
+            if "after_reproducibility" in fv:
+                print(f"               before {fv['before_reproducibility']} "
+                      f"-> after {fv['after_reproducibility']} "
+                      f"(severity {fv['before_severity']} -> {fv['after_severity']})")
+
+    for t in report.get("learned_techniques", []):
+        print(f"\n  [LEARNED] {t['id']}")
+        print(f"    {t['name']}: {t['mechanism'][:150]}")
 
     print(f"\n  gates hit: {gates}")
     print(f"  sse events: {counts}")
+
+    # 5. regression gate over the same report --------------------------------
+    _ci_demo(report, args.base)
 
     expected = {"run_start", "report_finalization"}
     if not expected.issubset(set(gates)):
         print(f"  MISSING GATES: {expected - set(gates)}")
         return 1
     return 0
+
+
+def _ci_demo(report: dict, base: str) -> None:
+    """Run the regression gate against the report that was just produced.
+
+    The target has not changed, so every confirmed finding must still
+    reproduce and the gate must go red. A green gate here would mean the gate
+    is not actually checking anything.
+    """
+    from sentinel import ci
+
+    if not any(f.get("confirmed") for f in report.get("findings", [])):
+        print("\n  [ci] no confirmed findings; nothing to gate on")
+        return
+
+    print("\n" + "=" * 70)
+    print("REGRESSION GATE (same target, unchanged - expect FAIL)")
+    print("=" * 70)
+    result = ci.run_gate(report, endpoint=report.get("target_endpoint"))
+    print(ci.format_report(result))
+    if result.exit_code != ci.EXIT_REGRESSION:
+        print("  UNEXPECTED: the gate did not detect the still-open finding")
 
 
 def _approve(base: str, run_id: str, gate: str) -> None:

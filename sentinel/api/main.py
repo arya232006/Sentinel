@@ -194,12 +194,38 @@ def get_trace(run_id: str) -> list[dict]:
     return repo.list_trace(run_id)
 
 
+# ------------------------------------------------------------- knowledge ---
+@app.get("/knowledge/techniques")
+def list_techniques(learned_only: bool = False) -> dict:
+    """The planner's technique KB: the curated file plus whatever runs have
+    discovered for themselves. Learned entries carry the run and target that
+    found them, so a plan citing one is traceable."""
+    from sentinel.knowledge.retrieval import learned_techniques, load_techniques
+
+    learned = learned_techniques()
+    return {
+        "provenance": config.run_provenance(),
+        "curated": [] if learned_only else list(load_techniques()),
+        "learned": learned,
+        "counts": {
+            "curated": len(load_techniques()),
+            "learned": len(learned),
+        },
+    }
+
+
 # --------------------------------------------------------------- targets ---
 class TargetChat(BaseModel):
     messages: list[dict[str, Any]]
     session_id: str = ""
     attack_id: str | None = None
     turn: int | None = None
+    # Appended to the target's system prompt. Fix-and-reverify uses it to
+    # replay an attack against a target patched with the finding's own
+    # mitigation; nothing else in the request changes.
+    system_suffix: str = ""
+    # Overrides which model backs the target, for the differential audit.
+    model: str | None = None
 
 
 @app.post("/targets/{target_id}/chat")
@@ -209,7 +235,11 @@ def target_chat(target_id: str, body: TargetChat) -> dict:
     except KeyError:
         raise HTTPException(404, f"unknown target '{target_id}'")
 
-    kwargs: dict[str, Any] = {"session_id": body.session_id}
+    kwargs: dict[str, Any] = {
+        "session_id": body.session_id,
+        "system_suffix": body.system_suffix,
+        "model": body.model,
+    }
     if target_id == "tool_agent":
         kwargs.update(attack_id=body.attack_id, turn=body.turn)
     resp = target.chat(body.messages, **kwargs)
@@ -258,4 +288,5 @@ def _safe_state(state: dict | None) -> dict | None:
         "findings": state.get("findings", []),
         "attack_plan": state.get("attack_plan", []),
         "recon_profile": state.get("recon_profile", {}),
+        "learned_techniques": state.get("learned_techniques", []),
     }

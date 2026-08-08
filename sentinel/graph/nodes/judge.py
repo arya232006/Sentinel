@@ -80,7 +80,7 @@ def judge_response(
                 ),
             }
         ],
-        max_tokens=1200,
+        max_tokens=3000,
         effort=config.EFFORT_JUDGE,
         output_format=JudgeVerdict,
         run_id=run_id,

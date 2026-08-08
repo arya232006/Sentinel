@@ -68,6 +68,9 @@ class LLMResult:
     # Raw assistant content, needed by the tool-using target to read tool_use
     # blocks and to echo the assistant turn back on the next request.
     content_blocks: list[Any] = field(default_factory=list)
+    # Set when a call degraded rather than succeeded (e.g. unparsable structured
+    # output). Surfaced in the trace so a degraded run is visible, not silent.
+    trace_note: str = ""
 
     def tool_uses(self) -> list[dict[str, Any]]:
         out = []
@@ -131,6 +134,72 @@ def _summarize_input(system: str, messages: list[dict]) -> dict[str, Any]:
     }
 
 
+# Recovery escalates the MODEL, not the token budget.
+#
+# Measured, and it overturned the obvious guess. A structured response that
+# fails to parse looks like truncation, so the first fix was to retry with 3x
+# the tokens. That never once helped: the same prompt failed identically at
+# 4000, 8000 and 16000 - the model rambles until it exhausts whatever ceiling
+# it is given, so more room just buys more wasted tokens. One case that
+# succeeded at 4000 actually FAILED at 8000, i.e. the retry caused failures.
+#
+# What does work is swapping models. Opus 5 declines the recon and planning
+# prompts outright (cyber classifier) and generates unparsably on some attacker
+# prompts; Opus 4.8 either answers them cleanly or refuses cleanly - and a clean
+# refusal is a usable, first-class outcome, unlike an unparsable ramble.
+_PARSE_MAX_ATTEMPTS = 1
+
+
+def _invoke(
+    client: anthropic.Anthropic,
+    kwargs: dict[str, Any],
+    output_format: type[BaseModel] | None,
+    use_fallbacks: bool,
+) -> tuple[Any, Exception | None]:
+    """One API call in whichever shape this request needs.
+
+    Split out of traced_call so the identical request can be re-issued against
+    the fallback model when the primary declines.
+    """
+    if output_format is not None:
+        return _parse_once(client, kwargs, output_format)
+    if use_fallbacks:
+        return (
+            client.beta.messages.create(
+                betas=[config.FALLBACK_BETA], fallbacks="default", **kwargs
+            ),
+            None,
+        )
+    if kwargs["max_tokens"] > 16000:
+        with client.messages.stream(**kwargs) as stream:
+            return stream.get_final_message(), None
+    return client.messages.create(**kwargs), None
+
+
+def _parse_once(
+    client: anthropic.Anthropic, kwargs: dict[str, Any], output_format: type[BaseModel]
+) -> tuple[Any, Exception | None]:
+    """`messages.parse()`, returning the parse failure instead of raising it.
+
+    A structured response that cannot be parsed raises a pydantic
+    ValidationError from inside the SDK. Left alone, that propagates out of the
+    node and aborts the whole audit - one bad response anywhere kills the run.
+    Every node carries a `parsed is None` fallback for exactly this case; those
+    fallbacks were unreachable because the SDK raised first. Returning the error
+    is what makes them reachable.
+
+    Genuine API errors (auth, rate limit, 400) are re-raised untouched: those
+    are not recoverable by retrying, and masking one would turn a
+    misconfiguration into a silently degraded audit.
+    """
+    try:
+        return client.messages.parse(output_format=output_format, **kwargs), None
+    except anthropic.APIError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - schema/parse failure
+        return None, exc
+
+
 def traced_call(
     *,
     node: str,
@@ -143,6 +212,7 @@ def traced_call(
     tools: list[dict] | None = None,
     temperature: float | None = None,
     use_fallbacks: bool = False,
+    allow_refusal_fallback: bool = True,
     run_id: str = "",
     budget: dict[str, Any] | None = None,
 ) -> LLMResult:
@@ -154,7 +224,7 @@ def traced_call(
     """
     if (
         temperature is not None
-        and model.startswith("claude-opus-5")
+        and not config.accepts_temperature(model)
         and config.provider() == "anthropic"
     ):
         raise ValueError(
@@ -221,20 +291,77 @@ def traced_call(
         kwargs["temperature"] = temperature
 
     t0 = time.perf_counter()
-    if output_format is not None:
-        response = client.messages.parse(output_format=output_format, **kwargs)
-    elif use_fallbacks:
-        # Opus 5's cyber classifiers can decline probe generation. A
-        # cyber-category refusal is re-served by the fallback model inside the
-        # same call rather than surfacing as a dead end.
-        response = client.beta.messages.create(
-            betas=[config.FALLBACK_BETA], fallbacks="default", **kwargs
+    response, parse_error = _invoke(client, kwargs, output_format, use_fallbacks)
+
+    # 3b. client-side model fallback ---------------------------------------
+    #
+    # Two distinct failures recover the same way, so they share one path:
+    #
+    #   refusal        Opus 5's cyber classifiers decline the recon and
+    #                  planning prompts outright (measured: stop_reason
+    #                  "refusal", category "cyber", on every attempt). Opus 4.8
+    #                  answers the identical prompts.
+    #   unparsable     On some attacker prompts Opus 5 generates until it
+    #                  exhausts max_tokens without ever closing the JSON. Opus
+    #                  4.8 either answers cleanly or refuses cleanly - and a
+    #                  clean refusal is a usable outcome, unlike a ramble.
+    #
+    # The server-side `fallbacks` beta cannot be combined with structured
+    # output, and every node that matters uses structured output, so this is
+    # done client-side. Without it the auditor cannot profile or plan at all.
+    declined = getattr(response, "stop_reason", None) == "refusal"
+    unparsable = response is None
+    served_by_fallback = False
+    _refusal_surcharge = 0.0
+
+    if (
+        allow_refusal_fallback
+        and config.FALLBACK_MODEL
+        and model != config.FALLBACK_MODEL
+        and (declined or unparsable)
+    ):
+        # A ramble that never parsed still generated tokens; bill it at the
+        # ceiling it consumed. A refusal is billed from its own usage.
+        _refusal_surcharge = (
+            pricing.estimate_cost(model, est_in, max_tokens)
+            if unparsable
+            else pricing.cost_from_usage(model, getattr(response, "usage", None))
         )
-    elif max_tokens > 16000:
-        with client.messages.stream(**kwargs) as stream:
-            response = stream.get_final_message()
-    else:
-        response = client.messages.create(**kwargs)
+        fb_kwargs = {**kwargs, "model": config.FALLBACK_MODEL}
+        if not config.accepts_temperature(config.FALLBACK_MODEL):
+            fb_kwargs.pop("temperature", None)
+        fb_response, fb_error = _invoke(
+            client, fb_kwargs, output_format, use_fallbacks
+        )
+        if fb_response is not None:
+            response, parse_error = fb_response, fb_error
+            served_by_fallback = True
+            _fallback_reason = "declined" if declined else "generated unparsably"
+
+    if output_format is not None:
+        if response is None:
+            # Both the primary and the fallback produced something unparsable.
+            # Degrade, never abort - the caller's `parsed is None` branch takes
+            # over. Cost is estimated rather than read from usage, because the
+            # raise loses the response object; a generation that ran to its
+            # ceiling really did consume it, so this estimates a real cost.
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            attempts = 2 if _refusal_surcharge else 1
+            spent = pricing.estimate_cost(model, est_in, max_tokens) * attempts
+            result = LLMResult(
+                text="",
+                parsed=None,
+                refused=False,
+                stop_reason="output_parse_failed",
+                model=model,
+                usd=spent,
+                tokens_in=est_in * attempts,
+                tokens_out=max_tokens * attempts,
+                latency_ms=latency_ms,
+            )
+            result.trace_note = f"structured output unparsable: {parse_error}"[:500]
+            _finalize(result, node, model, system, messages, run_id, budget)
+            return result
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     # 4. refusal check, BEFORE content is indexed --------------------------
@@ -251,8 +378,12 @@ def traced_call(
         parsed = getattr(response, "parsed_output", None)
 
     # 5. cost --------------------------------------------------------------
+    # Bill against whichever model actually served the turn, plus the declined
+    # attempt when a fallback ran - a refusal generates few tokens but is not
+    # free, and silently dropping it would understate the run.
+    billed_model = config.FALLBACK_MODEL if served_by_fallback else model
     usage = getattr(response, "usage", None)
-    usd = pricing.cost_from_usage(model, usage)
+    usd = pricing.cost_from_usage(billed_model, usage) + _refusal_surcharge
     tin, tout = pricing.token_totals(usage)
 
     result = LLMResult(
@@ -268,6 +399,10 @@ def traced_call(
         latency_ms=latency_ms,
         content_blocks=list(getattr(response, "content", []) or []),
     )
+    if served_by_fallback:
+        result.trace_note = (
+            f"{model} {_fallback_reason}; re-served by {config.FALLBACK_MODEL}"
+        )
     _finalize(result, node, model, system, messages, run_id, budget)
     return result
 
@@ -302,6 +437,7 @@ def _finalize(
             "refused": result.refused,
             "refusal_category": result.refusal_category,
             "stop_reason": result.stop_reason,
+            "note": result.trace_note,
         },
     }
 

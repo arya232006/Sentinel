@@ -65,7 +65,7 @@ def planner_node(state: SentinelState) -> dict:
                 ),
             }
         ],
-        max_tokens=3000,
+        max_tokens=8000,
         effort=config.EFFORT_ATTACKER,
         output_format=AttackPlan,
         run_id=run_id,

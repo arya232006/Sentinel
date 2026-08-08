@@ -16,9 +16,11 @@ from sentinel.graph.nodes.craft_probe import craft_probe_node
 from sentinel.graph.nodes.judge import judge_node
 from sentinel.graph.nodes.planner import planner_node
 from sentinel.graph.nodes.recon import recon_node
+from sentinel.graph.nodes.reverify import reverify_node
 from sentinel.graph.nodes.score import score_node
 from sentinel.graph.nodes.send_to_target import send_to_target_node
 from sentinel.graph.nodes.verify import verify_node
+from sentinel.knowledge.learn import learn_kb_node
 from sentinel.scope.service import validate_scope
 from sentinel.state import SentinelState
 
@@ -58,7 +60,9 @@ def build_graph(checkpointer=None):
     g.add_node("next_attack", control.next_attack_node)
     g.add_node("verify", _guarded(verify_node, "verify"))
     g.add_node("score", _guarded(score_node, "scoring"))
+    g.add_node("reverify", _guarded(reverify_node, "reverify"))
     g.add_node("report_gate", gates.report_gate_node)
+    g.add_node("learn_kb", learn_kb_node)
     g.add_node("aborted", control.aborted_node)
     g.add_node("completed", control.completed_node)
 
@@ -111,15 +115,27 @@ def build_graph(checkpointer=None):
     )
 
     # tail
+    #
+    # reverify sits between score and the report gate on purpose. It needs the
+    # mitigation score writes, and the human at the report gate should see
+    # whether each mitigation was actually tested before approving the report.
+    #
+    # learn_kb sits AFTER the report gate, for the same reason the cross-run
+    # pattern table is written there: a rejected report must not be able to
+    # write into knowledge that every future run reads.
     g.add_conditional_edges(
         "verify", _aborted, {"aborted": "aborted", "continue": "score"}
     )
     g.add_conditional_edges(
-        "score", _aborted, {"aborted": "aborted", "continue": "report_gate"}
+        "score", _aborted, {"aborted": "aborted", "continue": "reverify"}
     )
     g.add_conditional_edges(
-        "report_gate", _aborted, {"aborted": "aborted", "continue": "completed"}
+        "reverify", _aborted, {"aborted": "aborted", "continue": "report_gate"}
     )
+    g.add_conditional_edges(
+        "report_gate", _aborted, {"aborted": "aborted", "continue": "learn_kb"}
+    )
+    g.add_edge("learn_kb", "completed")
     g.add_edge("completed", END)
     g.add_edge("aborted", END)
 

@@ -76,7 +76,7 @@ def recon_node(state: SentinelState) -> dict:
                 ),
             }
         ],
-        max_tokens=2000,
+        max_tokens=6000,
         effort=config.EFFORT_ATTACKER,
         output_format=ReconProfile,
         run_id=run_id,

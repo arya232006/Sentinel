@@ -8,9 +8,13 @@ before a tool-access finding is confirmed.
 
 from __future__ import annotations
 
-from sentinel import config
 from sentinel.llm.client import traced_call
-from sentinel.targets.base import TargetResponse
+from sentinel.targets.base import (
+    TargetResponse,
+    compose_system,
+    resolve_model,
+    temperature_for,
+)
 from sentinel.targets.interceptor import InterceptingToolRegistry
 from sentinel.targets.tools import TOOL_SCHEMAS
 
@@ -43,19 +47,24 @@ class ToolAgent:
         session_id: str = "",
         attack_id: str | None = None,
         turn: int | None = None,
+        *,
+        system_suffix: str = "",
+        model: str | None = None,
     ) -> TargetResponse:
         convo = list(messages)
         final_text = ""
+        target_model = resolve_model(model)
+        system = compose_system(SYSTEM, system_suffix)
 
         for _ in range(MAX_TOOL_ITERATIONS):
             result = traced_call(
                 node=f"target:{self.target_id}",
-                model=config.TARGET_MODEL,
-                system=SYSTEM,
+                model=target_model,
+                system=system,
                 messages=convo,
                 max_tokens=1024,
                 tools=TOOL_SCHEMAS,
-                temperature=0.0,
+                temperature=temperature_for(target_model),
             )
             if result.refused:
                 return TargetResponse(text="", error="target model refused")

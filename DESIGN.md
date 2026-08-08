@@ -1,7 +1,10 @@
 # Sentinel — Architecture & Implementation Design
 
 Design document for the build described in [sentinel_claude_code_prompt.md](sentinel_claude_code_prompt.md).
-Status: **proposed, not yet implemented.** Nothing in this repo is built.
+
+Status: **implemented.** This document records the reasoning behind the design;
+where it and the code disagree, **the code is authoritative**. Known divergences
+are listed in §1 and §20.
 
 ---
 
@@ -14,6 +17,19 @@ node against current Claude API behaviour.
 
 It does **not** cover: prompt text (written during implementation), React component
 internals, or deployment.
+
+### 1.1 Where this document has drifted from the code
+
+Recorded rather than silently corrected, because the reasoning below is still
+what motivated each decision:
+
+| § | Says | Code actually does | Why |
+|---|---|---|---|
+| 6 | `succeeded → verify` | `succeeded → next_attack`; verify runs once at the end over all candidates | Exiting the cycle on the first success would end the audit at one finding |
+| 10 | verification replays the final probe | replays the **full recorded conversation** with the trigger as its last turn | A multi-turn attack works *because* of its setup turns; replaying the last one cold could never fire, so such findings could never confirm |
+| 11 | finding status is confirmed / text-only | four-way: `confirmed`, `text_only_unconfirmed`, `inconsistent`, `not_reproduced` | Three distinct failure modes were sharing one label, and `text_only_unconfirmed` is meaningless outside tool categories |
+
+§20 documents four capabilities added after this document was written.
 
 ---
 
@@ -299,15 +315,28 @@ end-of-node.
                               ►   │  score   │   rubric × reproducibility
                                   └────┬─────┘
                                        ▼
-                              ┌────────────────┐
-                              │  report_gate   │
-                              │   interrupt()  │
+                                  ┌──────────┐   replay each confirmed finding
+                              ►   │ reverify │   against a target patched with
+                                  └────┬─────┘   its own mitigation (§20.1)
+                                       ▼
+                              ┌────────────────┐  payload carries fix_status, so
+                              │  report_gate   │  the reviewer sees whether each
+                              │   interrupt()  │  mitigation was actually tested
                               └────────┬───────┘
                                        ▼
+                                 ┌──────────┐    write novel mechanisms back to
+                                 │ learn_kb │    the technique KB (§20.4).
+                                 └────┬─────┘    AFTER the gate, so a rejected
+                                      ▼          report cannot teach future runs
                                  ┌───────────┐
                                  │ completed │
                                  └───────────┘
 ```
+
+`reverify` sits before the report gate because the human approving the report
+should see whether each mitigation was tested. `learn_kb` sits after it, for the
+same reason the cross-run pattern table is written there: a rejected report must
+not be able to write into knowledge that every future run reads.
 
 `►` marks a phase transition where `validate_scope()` is re-checked. Six checkpoints:
 recon entry, planner entry, each `craft_probe` entry, verify entry, score entry, report entry.
@@ -685,3 +714,104 @@ revisable later.
 | Demo depends on live API | Cassette-replay mode: record a golden run to JSON, replay through the same SSE broker if the network dies on stage. Dual-purpose — also carries the Opus 5 bonus target (§8.4) |
 | Hard cap aborts a run mid-demo | Cap raised to $8 with a $5 soft warning (§18.1); the amber counter gives visible lead time to cut a run short deliberately rather than being cut off |
 | Replayed finding mistaken for a live one | `provenance: "replayed"` on the `Finding` model, distinct UI badge, non-determinism stated alongside the reproducibility figure, verbal disclosure during the demo (§8.4) |
+
+---
+
+## 20. Post-design extensions
+
+Four capabilities added after this document was written. Each is described here
+because each made a structural decision that the sections above do not cover.
+
+All three of the replay-based ones reduce to a single operation — *replay a
+recorded finding against a target and judge what comes back* — so that operation
+lives in `sentinel/replay.py` and each feature owns only its target
+modification. Had they each grown their own copy, their numbers would have
+stopped being comparable to each other and to the reproducibility figure in the
+report, which is the only thing that makes a BEFORE/AFTER meaningful.
+
+The shared contract: replay the **full recorded conversation** with
+`trigger_probe` as its final turn, judged by the same `judge_response` against
+the same goal string, with the same `VERIFY_MAJORITY` rule §10 uses. Nothing is
+allowed to diverge from what `verify` measured.
+
+Two parameters were threaded through `TargetAgent.chat` → `transport.call_target`
+→ `POST /targets/{id}/chat` to support them:
+
+- `system_suffix` — appended to the target's system prompt
+- `model` — overrides the model backing the target
+
+`temperature_for(model)` was introduced at the same time. The targets previously
+hard-coded `temperature=0.0`, which is correct for Haiku and a **400 on Opus 5**;
+a differential run that included Opus would have failed outright. `config.accepts_temperature`
+is now the single source of truth for that constraint, consulted by both the
+targets and `traced_call`'s guard.
+
+### 20.1 Fix-and-reverify (`graph/nodes/reverify.py`)
+
+Applies each finding's own mitigation to the target's system prompt and replays
+the identical attack. The AFTER run differs from BEFORE in exactly one respect —
+the mitigation text, embedded verbatim — because anything else would mean the
+two runs are not a comparison.
+
+Four verdicts (`fix_verified` / `fix_partial` / `fix_failed` / `inconclusive`).
+`inconclusive` exists specifically so an unreachable target can never be read as
+"the hole is closed"; that is the one failure mode that inverts the conclusion.
+
+Bounded on three axes — top *N* by severity, confirmed only, and skipped
+wholesale past `REVERIFY_BUDGET_FRACTION` of the cap. Proving a fix is worth less
+than finishing the report it belongs to. A skip records its reason on the
+finding rather than silently omitting the field.
+
+### 20.2 CI regression gate (`ci.py`, `cli.py`)
+
+`sentinel ci --baseline report.json`. Replays only confirmed findings; no recon,
+no planning, no probe generation.
+
+Exit `0` held / `1` regressed / `2` unevaluable. **`2` is deliberately distinct
+from `1`.** A gate that cannot determine whether it passed must not report
+"pass" — a green build on a broken check actively asserts the vulnerability is
+closed, which is worse than no check at all. Unreachable target, exhausted
+budget, and scope refusal all land on `2`.
+
+Gating only on *confirmed* findings is also deliberate: an inconsistent finding
+would produce an inconsistent build.
+
+The gate mints its own scope record restricted to exactly the categories in the
+baseline, and re-validates per finding. Replaying an attack is an attack; there
+is no path through Sentinel that attacks something without an authorization
+record, and a hand-edited baseline cannot widen that scope.
+
+### 20.3 Differential audit (`differential.py`)
+
+Same finding, same harness, one model swapped. Distinguishes a prompt weakness
+from a model weakness, which have different fixes.
+
+Reports its own limits rather than burying them: cells sampled without
+`temperature=0` are flagged per cell, and a difference within one rerun is
+reported as "no separation", not as a ranking. A unanimous result is evaluated
+*before* the noise floor — every model failing has zero spread, but "all of them
+are broken" is stronger and more actionable than "cannot distinguish them".
+
+### 20.4 Self-extending technique KB (`knowledge/learn.py`)
+
+The cross-run pattern table (§13) knows *that* a category works against a target
+type. It cannot tell a later run *how*. This writes the mechanism back.
+
+Stored as a SQLite table, not appended to `techniques.json`: the curated file is
+a reviewed artifact under version control, and machine-appending would produce
+noisy diffs and lose entries on checkout. `retrieve_techniques` merges both
+sources and scores them identically — a learned entry competes with a curated
+one on fit rather than being privileged or penalised.
+
+Three guards, because this table is read by every future run and a bad entry is
+persistent in a way a bad probe is not:
+
+1. **Confirmed and fully reproducible only.** A flaky finding is not evidence of
+   a technique.
+2. **Novelty check** against existing entries in the category, plus a local
+   name-collision backstop. Without it the KB fills with near-identical entries
+   that crowd out the curated ones on every retrieval.
+3. **Provenance fence.** A live run retrieves only live discoveries. An offline
+   or shakedown "technique" can be an artifact of the harness, and letting one
+   steer a real audit would quietly corrupt a real result. Each mode learns only
+   from itself.
