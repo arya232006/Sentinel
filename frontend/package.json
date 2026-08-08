@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "geist": "^1.7.2",
+    "lenis": "^1.3.26",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

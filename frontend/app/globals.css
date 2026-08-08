@@ -33,10 +33,82 @@
 
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --font-sans: ui-sans-serif, -apple-system, "Inter", "Segoe UI", system-ui, sans-serif;
+  /* Nav chrome. Kept separate from --font-sans so the webfont is scoped to the
+     handful of nav labels rather than becoming the whole app's body face. */
+  --font-ui: var(--font-instrument-sans), var(--font-sans);
+  /* The statement band under the hero only, same reasoning as --font-ui: scoped
+     to the one place it earns its keep rather than becoming a second body face.
+     Wired up in app/layout.tsx; the system serif behind it is what renders if
+     the webfont fails. */
+  --font-serif: var(--font-instrument-serif), ui-serif, Georgia, "Times New Roman",
+    serif;
+  /* Display face for the landing masthead only. Geist Pixel Grid, wired up in
+     app/layout.tsx — the woff2 ships inside the `geist` package and next/font
+     self-hosts it, so there is still no network fetch and the console stays
+     usable offline. The var is only defined under the font's class on <html>;
+     the mono stack behind it is what renders if that ever fails to load. */
+  --font-display: var(--font-geist-pixel-grid), ui-monospace, "SF Mono", Menlo,
+    Consolas, monospace;
 }
 
+/* No `scroll-behavior: smooth` here. Lenis animates the scroll position itself
+   on the landing page, and a native smooth scroll running at the same time
+   fights it for the same property — the documented cause of jittery anchors.
+   See components/landing/SmoothScroll.tsx. */
 html {
   color-scheme: dark;
+
+  /* Not @theme tokens — these back a couple of hand-written rules below that
+     need to flip with the theme rather than generate utilities. */
+  --grid-line: #ffffff06;
+  --scrollbar-hover: #29303d;
+}
+
+/*
+ * Light theme, scoped to a subtree.
+ *
+ * Deliberately a class rather than a media query or a root toggle: the console
+ * and the run views are dark by choice (see the top of this file), and only the
+ * narrative bands below the hero turn light. Because every component down there
+ * already draws from the semantic tokens rather than literal colours, re-pointing
+ * the tokens is enough — Panel, Badge, Button and the whole scope form invert
+ * without knowing this exists, and nothing outside the subtree is touched.
+ *
+ * The accent and severity hues are replaced, not reused. #2ee6cd sits at roughly
+ * 1.4:1 on white and the severity colours are barely better, so each is remixed
+ * darker to clear 4.5:1 — these are used for 10-11px uppercase type, which is
+ * exactly where thin contrast fails first.
+ */
+.theme-light {
+  /* Native controls in the scope form would otherwise stay dark. */
+  color-scheme: light;
+
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f3f6;
+  --color-surface-3: #e7eaef;
+  --color-line: #dce1e8;
+  --color-line-soft: #e9ecf1;
+
+  --color-ink: #14161a;
+  --color-ink-dim: #4a525f;
+  --color-ink-mute: #757e8c;
+
+  --color-accent: #0d8073;
+  --color-accent-dim: #5fb3a8;
+
+  --color-crit: #d92336;
+  --color-high: #b85c0a;
+  --color-med: #8f6800;
+  --color-low: #2563c9;
+  --color-good: #10804f;
+  --color-info: #5b4bd6;
+
+  --grid-line: #00000010;
+  --scrollbar-hover: #c4cad4;
+
+  background: var(--color-bg);
+  color: var(--color-ink);
 }
 
 body {
@@ -47,11 +119,12 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04";
 }
 
-/* A faint grid keeps large empty panels from reading as broken. */
+/* A faint grid keeps large empty panels from reading as broken. Driven by a
+   variable so it darkens under .theme-light — white hairlines vanish there. */
 .bg-grid {
   background-image:
-    linear-gradient(to right, #ffffff06 1px, transparent 1px),
-    linear-gradient(to bottom, #ffffff06 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -69,7 +142,7 @@ body {
   border-radius: 4px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #29303d;
+  background: var(--scrollbar-hover);
 }
 *::-webkit-scrollbar-track {
   background: transparent;
@@ -108,6 +181,121 @@ body {
 .wrap-any {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* ---------------------------------------------------------------------------
+   Landing page.
+   The hero sits on a photographic background, so text there cannot rely on the
+   flat --color-bg contrast the rest of the app assumes; it gets its own glow
+   and scrim treatment instead.
+   --------------------------------------------------------------------------- */
+
+/*
+ * Lit type. Four layers, because a single wide blur reads as haze rather than
+ * light: a tight near-white core that blooms between the pixel font's separated
+ * squares, two progressively wider cool halos, and a dark drop to hold the edge
+ * against a bright patch of sky.
+ *
+ * Sized in `em` so the glow tracks the type — the masthead's two lines differ by
+ * almost 3x, and a fixed blur that suits the title swamps the subtitle. Note this
+ * has to be applied to whichever element actually *sets* the font-size: em in an
+ * inherited property is resolved where it is declared, so putting this on a
+ * wrapper whose own font-size is the 16px default would compute the glow against
+ * that instead of the size you can see.
+ */
+.glow-text {
+  text-shadow:
+    0 0 0.05em rgba(255, 255, 255, 0.6),
+    0 0 0.28em rgba(226, 236, 255, 0.5),
+    0 0 0.85em rgba(150, 180, 255, 0.4),
+    0 0.03em 0.3em rgba(4, 8, 20, 0.55);
+}
+
+/* Enough of a shadow to keep small type legible over the brightest part of the
+   skyline without dimming the artwork behind it. */
+.ink-shadow {
+  text-shadow: 0 1px 12px rgba(4, 8, 20, 0.85);
+}
+
+/* The same shadow at zero alpha, for type that crosses off the photograph. It
+   has to be a transparent shadow rather than `text-shadow: none` — none is not
+   interpolable, so the glow would snap off instead of fading with the ink. */
+.ink-shadow-clear {
+  text-shadow: 0 1px 12px rgba(4, 8, 20, 0);
+}
+
+/*
+ * Light frosted glass for the hero panels. A white veil rather than a black one:
+ * it lightens and keeps the photograph's colour showing through, where dimming
+ * flattens the artwork to grey. The saturate boost is what stops the blur from
+ * washing the colour out, and the inset top line reads as the lit edge of a
+ * physical pane.
+ *
+ * Backdrop filters are the whole effect here, so where they are unsupported the
+ * @supports fallback below raises the veil to stay legible without the blur.
+ */
+.glass {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  backdrop-filter: blur(28px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 24px 70px rgba(6, 9, 18, 0.3);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: rgba(148, 150, 170, 0.42);
+  }
+}
+
+/*
+ * The nav is fixed, so it crosses off the photograph and onto the light bands
+ * below while the page scrolls, and its foreground has to invert on the way.
+ * One rule drives the crossing on the shell and on every child that changes, so
+ * the ink, the veil and the glow all arrive together rather than in separate
+ * visible steps.
+ *
+ * The property list is spelled out because text-shadow is not in Tailwind's
+ * `transition` set. The durations are staggered against it: hover feedback is
+ * carried by background-color and stays at the usual 150ms, while the crossing
+ * itself — everything the scroll position drives — takes its time.
+ */
+.nav-cross {
+  transition-property: color, text-shadow, background-color, border-color, box-shadow;
+  transition-duration: 420ms, 420ms, 150ms, 420ms, 420ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The light end of that crossing: a heavier white veil so 13px ink stays crisp
+   over whatever scrolls beneath, and an edge and drop dark enough to read on a
+   near-white band. Declared after .glass so it wins — both are single classes,
+   so this is source order rather than specificity. Same two shadow layers as
+   .glass, in the same order, which is what lets box-shadow interpolate. */
+.glass-ink {
+  background: rgba(255, 255, 255, 0.66);
+  border-color: rgba(10, 14, 25, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 18px 50px rgba(10, 14, 25, 0.1);
+}
+
+/* Pixel art, scaled by the device pixel ratio even at its native CSS size. The
+   browser's default smooth resampling would soften exactly the thing that makes
+   it read — the squares. */
+.pixelated {
+  image-rendering: pixelated;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+.rise {
+  /* `both` so the delayed items stay hidden until their turn rather than
+     flashing at full opacity on first paint. */
+  animation: rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* ---------------------------------------------------------------------------
@@ -170,10 +358,15 @@ body {
 }
 .hold-flash { animation: hold-flash 1.1s ease-in-out infinite; }
 
+/* Lenis reads prefers-reduced-motion itself, so the scroll side of this is
+   already handled; what is left is the decorative animation. */
 @media (prefers-reduced-motion: reduce) {
   .beam-travel, .tracer, .impact-burst, .charge-pulse,
-  .radar-sweep, .log-in, .hold-flash, .live-dot, .sweep::after {
+  .radar-sweep, .log-in, .hold-flash, .live-dot, .sweep::after, .rise {
     animation: none !important;
   }
   .beam-travel { stroke-dashoffset: 0; }
+  /* `rise` uses fill-mode both, so cancelling the animation alone would leave
+     the element stuck at its from-state. */
+  .rise { opacity: 1; transform: none; }
 }
