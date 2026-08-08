@@ -280,6 +280,64 @@ def record_pattern_outcome(
         conn.commit()
 
 
+# -------------------------------------------------- learned techniques ---
+def insert_learned_technique(entry: dict[str, Any]) -> bool:
+    """Persist a technique discovered by a run. Returns False if the id was
+    already taken, which is the last-line dedupe behind the novelty check."""
+    with _db() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO learned_techniques
+               (id, category, name, exploits, mechanism, signals_json,
+                novelty_reasoning, provenance, source_run_id, source_finding_id,
+                source_target, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                entry["id"],
+                entry["category"],
+                entry["name"],
+                entry["exploits"],
+                entry["mechanism"],
+                json.dumps(entry.get("signals_of_susceptibility", [])),
+                entry.get("novelty_reasoning", ""),
+                entry.get("provenance", "live"),
+                entry.get("source_run_id", ""),
+                entry.get("source_finding_id", ""),
+                entry.get("source_target", ""),
+                _now(),
+            ),
+        )
+        conn.commit()
+        # rowcount is read inside the lock: another thread's statement on the
+        # shared connection would otherwise clobber it between commit and read.
+        return cur.rowcount > 0
+
+
+def list_learned_techniques(
+    provenance: str | None = None, category: str | None = None
+) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM learned_techniques"
+    where, params = [], []
+    if provenance:
+        where.append("provenance = ?")
+        params.append(provenance)
+    if category:
+        where.append("category = ?")
+        params.append(category)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at"
+
+    out = []
+    with _db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    for r in rows:
+        row = dict(r)
+        row["signals_of_susceptibility"] = json.loads(row.pop("signals_json") or "[]")
+        row["learned"] = True
+        out.append(row)
+    return out
+
+
 SEED_PATTERNS = [
     ("authority_impersonation", "support_bot", 7, 5),
     ("multiturn_erosion", "support_bot", 9, 6),

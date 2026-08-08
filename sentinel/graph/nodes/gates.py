@@ -113,6 +113,10 @@ def report_gate_node(state: SentinelState) -> dict:
                     "severity": f.get("severity"),
                     "confirmed": f.get("confirmed"),
                     "minimized_prompt": (f.get("minimized_prompt") or "")[:200],
+                    # reverify runs before this gate, so the reviewer can see
+                    # whether each mitigation was tested - and whether it
+                    # actually worked - before approving the report.
+                    "fix_status": (f.get("fix_verification") or {}).get("status"),
                 }
                 for f in findings
             ],

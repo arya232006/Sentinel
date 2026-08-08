@@ -27,23 +27,35 @@ def call_target(
     session_id: str = "",
     attack_id: str | None = None,
     turn: int | None = None,
+    system_suffix: str = "",
+    model: str | None = None,
 ) -> dict[str, Any]:
     """POST to the target. Returns a dict with text/tool_calls/retrieved_docs.
 
     On exhaustion of retries, returns {"inconclusive": True, ...} rather than
     raising, so one flaky target cannot abort an otherwise healthy run.
+
+    `system_suffix` appends a block to the target's system prompt and `model`
+    overrides which model backs it. Both exist so an attack can be replayed
+    against a *modified* target - patched with a mitigation (fix-and-reverify)
+    or backed by a different model (differential audit) - while everything
+    else about the request stays byte-identical to the original.
     """
     # In-process shortcut: "inproc://<target_id>" calls the target directly,
     # bypassing HTTP. Used by the offline pipeline and tests, and by a
     # single-process demo. The graph is otherwise identical either way.
     if endpoint.startswith("inproc://"):
-        return _call_inproc(endpoint, messages, session_id, attack_id, turn)
+        return _call_inproc(
+            endpoint, messages, session_id, attack_id, turn, system_suffix, model
+        )
 
     payload = {
         "messages": messages,
         "session_id": session_id,
         "attack_id": attack_id,
         "turn": turn,
+        "system_suffix": system_suffix,
+        "model": model,
     }
     last_error = ""
     delay = 0.5
@@ -105,6 +117,8 @@ def _call_inproc(
     session_id: str,
     attack_id: str | None,
     turn: int | None,
+    system_suffix: str = "",
+    model: str | None = None,
 ) -> dict[str, Any]:
     from sentinel.targets import get_target
 
@@ -116,8 +130,12 @@ def _call_inproc(
             "text": "", "tool_calls": [], "retrieved_docs": [],
             "inconclusive": True, "error": str(exc),
         }
+    kwargs: dict[str, Any] = {
+        "session_id": session_id,
+        "system_suffix": system_suffix,
+        "model": model,
+    }
     # ToolAgent accepts attack_id/turn for interception attribution.
-    kwargs: dict[str, Any] = {"session_id": session_id}
     if target_id == "tool_agent":
         kwargs.update(attack_id=attack_id, turn=turn)
     resp = target.chat(messages, **kwargs)

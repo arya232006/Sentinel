@@ -93,3 +93,30 @@ CREATE TABLE IF NOT EXISTS attack_patterns (
     updated_at     TEXT,
     PRIMARY KEY (attack_pattern, target_type)
 );
+
+-- Techniques Sentinel discovered for itself, written after a confirmed finding
+-- whose mechanism the curated KB did not already cover. Retrieved alongside
+-- techniques.json on later runs, including against different targets.
+--
+-- Deliberately a table rather than an append to techniques.json: the curated
+-- file is a reviewed artifact under version control, and machine-appending to
+-- it would both produce noisy diffs and lose entries on a checkout. Provenance
+-- is stored per row so a simulated or shakedown discovery can be kept out of a
+-- live audit's retrieval.
+CREATE TABLE IF NOT EXISTS learned_techniques (
+    id                TEXT PRIMARY KEY,
+    category          TEXT NOT NULL,
+    name              TEXT NOT NULL,
+    exploits          TEXT NOT NULL,
+    mechanism         TEXT NOT NULL,
+    signals_json      TEXT NOT NULL,
+    novelty_reasoning TEXT,
+    provenance        TEXT NOT NULL DEFAULT 'live',
+    source_run_id     TEXT NOT NULL,
+    source_finding_id TEXT NOT NULL,
+    source_target     TEXT NOT NULL,
+    created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_category
+    ON learned_techniques(category, provenance);

@@ -69,6 +69,28 @@ class SeverityAssessment(BaseModel):
     blast_radius_notes: str
 
 
+class LearnedTechnique(BaseModel):
+    """A technique the auditor discovered and is proposing to write into its
+    own knowledge base. Mirrors the shape of a curated techniques.json entry so
+    retrieval treats learned and curated entries identically."""
+
+    is_novel: bool = Field(
+        description="False if an existing documented technique already "
+        "describes this mechanism, however differently this attack was worded."
+    )
+    name: str = Field(description="Short mechanism-level name, e.g. 'Pre-approval assertion'.")
+    exploits: str = Field(description="The structural weakness this leverages.")
+    mechanism: str = Field(
+        description="How the manoeuvre works, at a level that transfers to a "
+        "different target. Not the specific prompt that happened to work."
+    )
+    signals_of_susceptibility: list[str] = Field(
+        default_factory=list,
+        description="Observable recon signals suggesting a target is exposed.",
+    )
+    novelty_reasoning: str = ""
+
+
 class ProbeDraft(BaseModel):
     probe: str
     angle: str = Field(description="What this probe changes versus the last one.")
@@ -90,9 +112,12 @@ class SentinelState(TypedDict, total=False):
     # phase outputs
     recon_profile: dict[str, Any]
     attack_plan: list[dict[str, Any]]
-    # findings is written by verify (once) then enriched by score (once),
-    # sequentially and on a single path - last-write-wins, not append.
+    # findings is written by verify (once), enriched by score (once), then by
+    # reverify (once) - sequentially on a single path, so last-write-wins
+    # rather than append.
     findings: list[dict[str, Any]]
+    # Techniques written back into the KB by this run, for the report.
+    learned_techniques: list[dict[str, Any]]
 
     # execution cursor
     current_attack_idx: int
@@ -128,6 +153,7 @@ def initial_state(
         "recon_profile": {},
         "attack_plan": [],
         "findings": [],
+        "learned_techniques": [],
         "current_attack_idx": 0,
         "current_attack_transcript": [],
         "current_attack_turn": 0,

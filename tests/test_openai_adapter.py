@@ -8,10 +8,74 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from sentinel.llm.openai_adapter import (
+    _response_format,
+    _validate,
     translate_messages,
     translate_tools,
 )
+from sentinel.state import (
+    AttackPlan,
+    JudgeVerdict,
+    ProbeDraft,
+    ReconProfile,
+    SeverityAssessment,
+)
+
+ALL_SCHEMAS = [ReconProfile, JudgeVerdict, AttackPlan, SeverityAssessment, ProbeDraft]
+_VERDICT = (
+    '{"classification":"succeeded","confidence":0.9,'
+    '"evidence_span":"x","reasoning":"y"}'
+)
+
+
+@pytest.mark.parametrize("model", ALL_SCHEMAS, ids=lambda m: m.__name__)
+def test_response_format_is_serializable_and_non_strict(model):
+    """Strict mode cannot express dict[str,str] or ge/le bounds, which the
+    Sentinel schemas use - so the adapter must send non-strict json_schema."""
+    import json
+
+    rf = _response_format(model)
+    assert rf["json_schema"]["strict"] is False
+    assert rf["json_schema"]["name"] == model.__name__
+    json.dumps(rf)  # must survive the wire
+
+
+def test_open_ended_dict_field_round_trips():
+    """ReconProfile.refusal_map is the field that 400'd under strict mode."""
+    rp = _validate(
+        ReconProfile,
+        '{"apparent_purpose":"support","refusal_map":{"pii":"soft_hedge"}}',
+    )
+    assert rp is not None
+    assert rp.refusal_map == {"pii": "soft_hedge"}
+
+
+def test_bounded_float_field_round_trips():
+    assert _validate(JudgeVerdict, _VERDICT).confidence == 0.9
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _VERDICT,
+        f"```json\n{_VERDICT}\n```",
+        f"Here is the verdict:\n{_VERDICT}",
+        f"```\n{_VERDICT}\n```",
+    ],
+    ids=["plain", "fenced-json", "prefaced", "fenced-bare"],
+)
+def test_validation_survives_common_model_formatting(raw):
+    v = _validate(JudgeVerdict, raw)
+    assert v is not None and v.classification == "succeeded"
+
+
+def test_unparseable_output_returns_none_not_an_exception():
+    """Nodes treat parsed=None as a graceful degradation; it must not raise."""
+    assert _validate(JudgeVerdict, "I cannot do that") is None
+    assert _validate(JudgeVerdict, "") is None
 
 
 def test_system_prompt_becomes_a_system_message():

@@ -31,10 +31,19 @@ EFFORT_ATTACKER = "high"
 EFFORT_JUDGE = "medium"
 EFFORT_SCORING = "medium"
 
-# Server-side refusal fallback for the attacker node. Opus 5's cyber
-# classifiers can decline probe generation; this re-serves via Opus 4.8
-# inside the same call.
+# Server-side refusal fallback, for non-structured calls only.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+# Client-side refusal fallback. MEASURED, not speculative: Opus 5's cyber
+# classifiers decline the recon and planning prompts on every attempt
+# (stop_reason="refusal", category="cyber"), while Opus 4.8 answers the
+# identical prompts cleanly. The server-side `fallbacks` beta cannot be
+# combined with structured output, and every node that matters uses structured
+# output - so traced_call re-issues a declined request against this model
+# itself. Without it the auditor cannot profile or plan against a target.
+#
+# Set to "" to disable and let a refusal stand as a first-class outcome.
+FALLBACK_MODEL = os.getenv("SENTINEL_FALLBACK_MODEL", "claude-opus-4-8")
 
 
 # --------------------------------------------------------------------------
@@ -49,6 +58,45 @@ MAX_MINIMIZATION_STEPS = 8
 TARGET_HTTP_RETRIES = 3
 TARGET_HTTP_TIMEOUT = 60.0
 TRANSCRIPT_WINDOW = 8  # turns of history fed back into craft_probe
+
+
+# --------------------------------------------------------------------------
+# Fix-and-reverify. After scoring writes a mitigation, the same attack is
+# replayed against a target whose system prompt carries that mitigation. A
+# mitigation nobody tested is an opinion; this turns it into a measurement.
+#
+# Bounded hard: only the top confirmed findings are re-verified, and the phase
+# is skipped entirely once the run has spent past REVERIFY_BUDGET_FRACTION of
+# its cap - proving a fix is worth less than finishing the report.
+# --------------------------------------------------------------------------
+REVERIFY_ENABLED = os.getenv("SENTINEL_REVERIFY", "1") == "1"
+REVERIFY_RERUNS = 3
+MAX_REVERIFY_FINDINGS = 3
+REVERIFY_BUDGET_FRACTION = 0.85
+# Prepended to any mitigation injected into a target's system prompt. Marks
+# the prompt as patched so a patched run can never be mistaken for a baseline
+# one, and gives the offline simulation something to key on.
+MITIGATION_PATCH_MARKER = "[SENTINEL MITIGATION PATCH]"
+
+
+# --------------------------------------------------------------------------
+# Self-extending technique knowledge base. A confirmed finding whose mechanism
+# is not already documented is written back as a new technique, which the
+# planner then retrieves on later runs - including against other targets.
+#
+# Only fully reproducible confirmed findings qualify: a flaky finding is not
+# evidence of a technique, and the KB is read by every future run.
+# --------------------------------------------------------------------------
+LEARN_KB_ENABLED = os.getenv("SENTINEL_LEARN_KB", "1") == "1"
+MAX_LEARNED_PER_RUN = 2
+LEARN_MIN_REPRODUCIBILITY = 1.0
+
+
+# --------------------------------------------------------------------------
+# Differential audit. The same confirmed attack replayed against the same
+# harness backed by different models, to show where a guardrail holds.
+# --------------------------------------------------------------------------
+DIFFERENTIAL_MODELS = ("claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5")
 
 
 @dataclass(frozen=True)
@@ -121,6 +169,31 @@ def provider() -> str:
 
 def is_shakedown() -> bool:
     return provider() != "anthropic"
+
+
+def run_provenance() -> str:
+    """How results produced right now were generated.
+
+    Stamped on findings and on learned techniques. 'shakedown' means a
+    non-Anthropic dev backend produced it and it says nothing about Claude;
+    'offline' means the deterministic simulation produced it.
+    """
+    if fake_llm():
+        return "offline"
+    if is_shakedown():
+        return "shakedown"
+    return "live"
+
+
+def accepts_temperature(model: str) -> bool:
+    """Opus 5 rejects `temperature` (and top_p/top_k) with a 400.
+
+    The single source of truth for that constraint. Callers that pick a model
+    at runtime - the differential audit runs the same target harness on Haiku,
+    Sonnet and Opus - must consult this rather than assuming the target model
+    always takes a temperature.
+    """
+    return not model.startswith("claude-opus-5")
 
 
 def api_key() -> str | None:

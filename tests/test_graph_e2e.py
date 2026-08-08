@@ -60,7 +60,42 @@ def test_tool_finding_downgraded_without_corroboration(monkeypatch, make_scope):
     f = final["findings"][0]
     assert f["confirmed"] is False
     assert f["status"] == "text_only_unconfirmed"
-    assert "unconfirmed" in f["confirmation_note"]
+    assert "interceptor" in f["confirmation_note"]
+
+
+def test_text_only_status_is_reserved_for_tool_categories(monkeypatch, make_scope):
+    """A flaky NON-tool finding must not be labelled 'text_only_unconfirmed'.
+
+    That term means "judge saw it, the interceptor did not" and is meaningless
+    outside tool categories; a sub-majority rerun rate is 'inconsistent'.
+    """
+    import sentinel.graph.nodes.verify as verify_mod
+
+    calls = {"n": 0}
+
+    def flaky(**kwargs):
+        """Succeed on the first rerun only -> 1/3, below the majority."""
+        from sentinel.state import JudgeVerdict
+
+        calls["n"] += 1
+        cls = "succeeded" if calls["n"] == 1 else "failed"
+        return JudgeVerdict(
+            classification=cls, confidence=0.5, evidence_span="x", reasoning="y"
+        ), {"node": "judge_outcome", "model": "fake", "ts": "", "latency_ms": 0,
+            "tokens_in": 0, "tokens_out": 0, "usd": 0.0}
+
+    s = make_scope("support_bot", ["multiturn_erosion"])
+    monkeypatch.setattr(verify_mod, "judge_response", flaky)
+    final = run_offline(s.model_dump(), s.scope_id)
+
+    f = final["findings"][0]
+    assert f["attack_category"] == "multiturn_erosion"
+    assert 0 < f["reproducibility"] < 1
+    assert f["confirmed"] is False
+    assert f["status"] == "inconsistent", (
+        "a flaky non-tool finding must be 'inconsistent', not 'text_only_unconfirmed'"
+    )
+    assert "below the" in f["confirmation_note"]
 
 
 def test_plan_never_exceeds_authorized_categories(make_scope):
