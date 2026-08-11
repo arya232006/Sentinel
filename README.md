@@ -261,6 +261,46 @@ budget check → the call → refusal check → cost from `usage` → trace entr
 
 ---
 
+## Attack taxonomy
+
+Six categories, defined once in `ATTACK_CATEGORIES` (`sentinel/config.py`) and
+enforced everywhere downstream — a scope authorizes a subset of these, the
+planner refuses to plan outside it, and every finding's `attack_category`
+traces back to one of them.
+
+| Category | Attacks by... |
+|---|---|
+| `direct_jailbreak` | asserting new operating instructions, or reframing the request as fiction/hypothetical |
+| `authority_impersonation` | claiming a privileged internal role, or an approval already granted, that the target has no way to check |
+| `multiturn_erosion` | small, individually-reasonable asks that compound into a boundary the first ask would have tripped |
+| `indirect_injection` | planting directives inside content the target is asked to read or summarize, not the user turn |
+| `rag_context_poisoning` | inserting a document into the retrieval corpus, phrased as an authoritative policy update |
+| `tool_parameter_hijacking` | well-formed tool arguments that point at a resource outside the caller's own authorization |
+
+Each is backed by 2-3 mechanism-level techniques in
+[`sentinel/knowledge/techniques.json`](sentinel/knowledge/techniques.json) —
+e.g. `tool_parameter_hijacking` covers argument substitution, threshold
+probing and query-scope widening as distinct mechanisms, not one payload.
+
+**How a probe gets built, not just picked.** `recon` profiles the target once
+per run into a `refusal_map` (per topic: `hard_block` / `soft_hedge` /
+`no_refusal`, inferred only from benign probing). `plan_attacks` retrieves
+matching techniques and prior-run outcomes, then plans attacks against the
+softest facets first, naming the exact `refusal_map` key each one targets
+(`target_facet`). `craft_probe` runs once per turn of an attack — escalating
+along the same angle or pivoting to a new one, and for `multiturn_erosion`
+explicitly referencing the target's own prior responses — so an attack is a
+live back-and-forth, not a fixed script replayed at the target.
+
+One constraint holds across every category: the attacker may not generate
+genuinely harmful content in full, even mid-jailbreak. `craft_probe`'s system
+prompt caps a probe at the point that proves the guardrail gap exists and
+records what it withheld (the `withheld` field) rather than completing the
+payload — the row this backs in [Status](#status) is exercised by
+`eval/run_eval.py --guardrail-only`.
+
+---
+
 ## Non-negotiable constraints, and where they are enforced
 
 | Constraint | Enforcement | Test |
