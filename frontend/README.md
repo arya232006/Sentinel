@@ -15,13 +15,17 @@ npm run dev            # http://localhost:3000
 The backend must be running separately (see the root README). The console
 expects it at `http://127.0.0.1:8000`; override with `NEXT_PUBLIC_SENTINEL_API`.
 
+`/` is the marketing landing page. The operator tool — scope authorization and
+the run launcher — is at `/console`. Both run light theme; the run views below
+stay dark.
+
 ## Two views of one run
 
 A run renders two ways, both fed by the same `useRunStream` subscription:
 
 | Route | View |
 |---|---|
-| `/runs/[id]/engagement` | Tactical engagement — the default landing view |
+| `/runs/[id]/engagement` | Tactical engagement — where a run opens by default |
 | `/runs/[id]` | Dense console — Plan / Transcript / Findings / Trace |
 
 Switching mid-run is supported: the new view replays history and fast-forwards.
@@ -30,14 +34,16 @@ Switching mid-run is supported: the new view replays history and fast-forwards.
 
 ```
 app/
-  page.tsx                          scope authorization + run launcher
-  runs/[runId]/page.tsx             dense console
-  runs/[runId]/engagement/page.tsx  tactical engagement view
+  page.tsx                          landing page (server component, light)
+  console/page.tsx                  scope authorization + run launcher (light)
+  runs/[runId]/page.tsx             dense console (dark)
+  runs/[runId]/engagement/page.tsx  tactical engagement view (dark)
 components/
-  ScopeForm  ApprovalModal  BudgetMeter  ModeBanner  ViewToggle
+  landing/               Hero  Sections  SmoothScroll  Arrow  links.ts
+  ScopeForm  ApprovalModal  BudgetMeter  ModeBanner  ViewToggle  Mark
   PlanPanel  TranscriptPanel  FindingsPanel  TracePanel
   engagement/  Stage  OpsLog  FindingsStrip  HoldOverlay
-  ui.tsx                 Panel / Badge / Field / Button primitives
+  ui.tsx                 Panel / Badge / Field / Button primitives (run views)
 lib/
   types.ts               mirrors the Python models; each type names its source
   api.ts                 typed client for the FastAPI surface
@@ -92,7 +98,12 @@ as soon as it is verified, then gains its score. Transcript turns are grouped by
 
 ## Conventions
 
-- Dark theme only, committed to deliberately; tokens live in `app/globals.css`.
+- Two themes, scoped by subtree via a `.theme-light` wrapper: the landing page
+  and `/console` run light (they are a form and a pitch, not an instrument
+  panel), while the run views stay dark, deliberately, since the job there is
+  reading a wall of live state at a glance. Components draw from semantic
+  tokens in `app/globals.css` rather than literal colours, so `ui.tsx` and the
+  run-view components invert correctly without knowing a wrapper exists.
 - A *succeeded* attack reads red (the target leaked) and a *failed* one reads
   green (the target held). This inverts the usual convention on purpose.
 - `Field` wraps exactly one labelable control. Use `FieldGroup` for button

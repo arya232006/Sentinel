@@ -35,16 +35,18 @@ Design rationale: [DESIGN.md](DESIGN.md). Original brief:
 | Fix-and-reverify, CI gate, differential audit, self-extending KB | Built |
 | Offline pipeline (`SENTINEL_FAKE_LLM=1`) | Verified end-to-end, all 3 targets |
 | HTTP path incl. interrupt gates | Verified end-to-end, all 3 targets |
-| Test suite | 166 passing |
-| Frontend — console + engagement views | Built; browser-verified against all 3 targets offline |
+| Test suite | 191 passing |
+| Frontend — landing, console, engagement + dense run views | Built; browser-verified against all 3 targets offline |
 | Shakedown backend (OpenAI, dev-only) | Run against the live OpenAI API on `support_bot` and `tool_agent` |
-| Live Claude audit run | **Executed** on `support_bot` — 3 confirmed findings, \$2.26, see [live_support_bot_report.json](live_support_bot_report.json) |
+| Live Claude audit run | **Executed on all three targets** — support_bot (3 confirmed, \$2.26), tool_agent (2 confirmed, \$0.82), rag_agent (2 confirmed, \$0.74). Reports: [support_bot](live_support_bot_report.json), [tool_agent](live_tool_agent_report.json), [rag_agent](live_rag_agent_report.json) |
+| CI gate + differential audit | **Executed live** against all three baselines — CI: [support_bot](ci_support_bot_result.json) (exit 0, held), [tool_agent](ci_tool_agent_result.json), [rag_agent](ci_rag_agent_result.json) (exit 1, regressed — expected, replayed unpatched); diff: [tool_agent](diff_tool_agent_result.json) |
+| Judge precision/recall | **Measured live** — F1 0.957, identical at low/medium/high (30-case sweep). Covers the succeed/fail call only; `impact_class`/severity accuracy is not yet measured — see [Known gaps](#known-gaps-measured-live) |
 | Attacker guardrail suite | Run, but **non-deterministic** — see [Known gaps](#known-gaps-measured-live). Must be green at `--trials 3` before a demo |
-| **Judge precision/recall numbers** | **Not yet measured** |
-| **Live runs against `tool_agent` / `rag_agent`** | **Not yet executed** |
 
-The bolded rows are wired and ready but unverified. Treat them as unproven until
-you run them.
+Every row above is backed by a report or result file checked into this repo.
+The one genuinely open item is the attacker guardrail suite: it is
+non-deterministic, so a past green run is not standing evidence — re-run it
+with `--trials` before you rely on it (see [Known gaps](#known-gaps-measured-live)).
 
 Prompt caching, refusal handling and per-node cost have all now been measured
 against the live API — what that turned up is in
@@ -94,6 +96,16 @@ manage half the repo:
 cd frontend && npm install && npm run dev     # http://localhost:3000
 ```
 
+`/` is a server-rendered landing page — narrative sections explaining what the
+tool does, every claim on it tied to a real code path (the double scope filter
+in `planner.py`, the `interrupt()` gates in `gates.py`, the severity arithmetic
+in `score.py`). The operator tool itself lives at **`/console`**: scope
+authorization and the run launcher, rebuilt light so it reads as a short form
+rather than an instrument panel. Landing and console both run light theme;
+once a run starts you land on the run views below, which stay dark — that
+density is earned there, where the job is reading a wall of live state at a
+glance.
+
 It talks to the API directly (CORS is open) and expects it at
 `http://127.0.0.1:8000`. Override with `NEXT_PUBLIC_SENTINEL_API` — note this is
 inlined at compile time, so pointing the console at a different backend needs a
@@ -108,8 +120,8 @@ restart it against whichever backend you want.)
 
 A run renders two ways off the same SSE subscription, switchable mid-run:
 
-- **`/runs/{id}/engagement`** — tactical view, the default landing. SENTINEL-1
-  against the target; probes are shots, the target's shields are its
+- **`/runs/{id}/engagement`** — tactical view, where a run opens by default.
+  SENTINEL-1 against the target; probes are shots, the target's shields are its
   `refusal_map`, and erosion is visible as facets weaken. Verification replays
   as a volley showing reproducibility and the minimized trigger.
 - **`/runs/{id}`** — the dense console: Plan / Transcript / Findings / Trace.
@@ -124,6 +136,17 @@ Two things that surprise people:
 - Scopes are write-once by design, so there is no delete path and the list
   accumulates. Deleting `sentinel.db` resets scopes, runs and findings; the
   seeded attack-pattern table rebuilds on startup.
+
+### Deploy
+
+`docker-compose.yml`, `Dockerfile`, `frontend/Dockerfile` and `Caddyfile` in
+this repo deploy backend, console and a TLS-terminating proxy as three
+containers on one instance. Single-instance is a consequence of the design,
+not a corner cut: live runs are held in a process-local dict and each is a
+thread parked on an `Event` until `/resume`, so a second replica would own a
+different set of runs. See [DEPLOY.md](DEPLOY.md) for the full walkthrough
+(AWS EC2, ~\$36/month), what a black-box target needs to speak, and what would
+have to change in the code to scale out.
 
 ---
 
@@ -215,9 +238,11 @@ sentinel/
   eval/                judge benchmark + attacker guardrail suite
   api/                 FastAPI + SSE broker (graph.stream -> typed events)
 
-frontend/              Next.js 16 console — see frontend/README.md
-  app/runs/[id]/                    dense console
-  app/runs/[id]/engagement/         tactical engagement view
+frontend/              Next.js 16 app — see frontend/README.md
+  app/page.tsx                      landing page (server-rendered, light)
+  app/console/                      scope authorization + run launcher (light)
+  app/runs/[id]/                    dense console (dark)
+  app/runs/[id]/engagement/         tactical engagement view (dark)
   lib/useRunStream.ts               SSE subscription + reducer
   lib/useEngagement.ts              feed -> paced engagement beats
 ```
@@ -612,6 +637,11 @@ or drop attacker effort for cheaper rehearsals.
   and treat only an all-trials-pass as evidence.
 - **Cost lands mostly on `craft_probe` and `recon`,** both `effort=high` Opus 5
   (or its fallback). If a run's budget is tight, that is where to trim.
+- **`impact_class` / severity accuracy is unmeasured.** The eval sweep scores
+  only the judge's succeed/fail call. Nothing yet checks whether `impact_class`
+  — and therefore the severity number derived from it — is assigned correctly,
+  so a confirmed finding's pass/fail is trustworthy but its severity score has
+  not been independently verified.
 
 ---
 
